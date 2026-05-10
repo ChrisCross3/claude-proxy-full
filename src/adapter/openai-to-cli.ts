@@ -13,6 +13,18 @@ import { resolveModel, ALL_EFFORT_LEVELS, type ClaudeEffort, type ClaudeModelDef
 /** Kept for downstream files; canonical IDs come from the registry now. */
 export type ClaudeModel = string;
 
+/**
+ * Error class for strict validation failures (unknown model, unsupported
+ * effort or thinking on a given model). The HTTP layer translates these into
+ * HTTP 400 invalid_request_error instead of HTTP 500 server_error.
+ */
+export class ModelValidationError extends Error {
+  constructor(message: string, public readonly code: string) {
+    super(message);
+    this.name = 'ModelValidationError';
+  }
+}
+
 export interface CliInput {
   prompt: string;
   /** Canonical Claude model ID, resolved through the registry. */
@@ -32,9 +44,10 @@ export interface CliInput {
 export function extractModel(model: string): string {
   const def = resolveModel(model);
   if (!def) {
-    throw new Error(
+    throw new ModelValidationError(
       `Unknown Claude model id or alias: '${model}'. ` +
       `Add it to src/models/registry.ts if Anthropic has released it.`,
+      'unknown_model',
     );
   }
   return def.id;
@@ -44,9 +57,10 @@ export function extractModel(model: string): string {
 export function resolveModelStrict(model: string): ClaudeModelDefinition {
   const def = resolveModel(model);
   if (!def) {
-    throw new Error(
+    throw new ModelValidationError(
       `Unknown Claude model id or alias: '${model}'. ` +
       `Add it to src/models/registry.ts if Anthropic has released it.`,
+      'unknown_model',
     );
   }
   return def;
@@ -71,16 +85,18 @@ export function extractEffort(raw: unknown): ClaudeEffort | undefined {
  */
 export function validateEffortForModel(def: ClaudeModelDefinition, effort: ClaudeEffort): void {
   if (def.effortLevels.length === 0) {
-    throw new Error(
+    throw new ModelValidationError(
       `Model '${def.id}' does not support the --effort flag at all. ` +
       `Omit reasoning_effort or switch to a model that supports it ` +
       `(see src/models/registry.ts).`,
+      'effort_unsupported',
     );
   }
   if (!def.effortLevels.includes(effort)) {
-    throw new Error(
+    throw new ModelValidationError(
       `Model '${def.id}' does not support effort='${effort}'. ` +
       `Allowed levels for this model: ${def.effortLevels.join(', ')}.`,
+      'effort_unsupported',
     );
   }
 }
@@ -108,10 +124,11 @@ export function extractThinking(raw: unknown): boolean | undefined {
  */
 export function validateThinkingForModel(def: ClaudeModelDefinition, thinking: boolean): void {
   if (thinking && !def.thinkingSupported) {
-    throw new Error(
+    throw new ModelValidationError(
       `Model '${def.id}' does not support extended thinking. ` +
       `Remove thinking from the request or switch to a model that supports it ` +
       `(see src/models/registry.ts).`,
+      'thinking_unsupported',
     );
   }
 }
