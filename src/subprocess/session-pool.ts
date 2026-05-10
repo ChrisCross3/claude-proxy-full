@@ -73,6 +73,8 @@ interface AcquireOptions {
   effort?: ClaudeEffort;
   /** Per-request thinking toggle. Becomes part of the pool fingerprint. */
   thinking?: boolean;
+  /** Verbose-logging category filter; not part of the fingerprint (diagnostic only). */
+  debug?: string;
 }
 
 function disallowedToolsKey(disallowedTools: string[] = []): string {
@@ -180,9 +182,10 @@ async function cold(
   // process rather than a pre-initialized generic one.
   const needsDedicated = (options.disallowedTools && options.disallowedTools.length > 0)
     || !!options.effort
-    || options.thinking !== undefined;
+    || options.thinking !== undefined
+    || !!options.debug;
   const sub = needsDedicated
-    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking)
+    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug)
     : await acquirePreInit(model);
 
   return {
@@ -194,9 +197,9 @@ async function cold(
   };
 }
 
-async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean): Promise<StreamJsonSubprocess> {
+async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string): Promise<StreamJsonSubprocess> {
   const sub = new StreamJsonSubprocess();
-  await sub.start({ model, disallowedTools, effort, thinking });
+  await sub.start({ model, disallowedTools, effort, thinking, debug });
   return sub;
 }
 

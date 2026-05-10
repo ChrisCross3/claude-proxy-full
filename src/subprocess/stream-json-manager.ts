@@ -110,6 +110,8 @@ export interface StreamJsonOptions {
    * Must already be validated against the model's registry entry.
    */
   thinking?: boolean;
+  /** Verbose-logging category filter for this spawn, mapped to claude --debug. */
+  debug?: string;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -166,6 +168,10 @@ export class StreamJsonSubprocess extends EventEmitter {
         );
       }
       args.push("--settings", JSON.stringify({ alwaysThinkingEnabled: options.thinking }));
+    }
+    // Optional verbose logging filter — passthrough of claude --debug.
+    if (options.debug) {
+      await pushClaudeFlagIfSupported(args, "--debug", { value: options.debug });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");

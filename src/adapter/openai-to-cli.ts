@@ -35,6 +35,8 @@ export interface CliInput {
   effort?: ClaudeEffort;
   /** Thinking toggle. Validated against the model's thinkingSupported flag. */
   thinking?: boolean;
+  /** Verbose logging category filter; mapped to claude --debug. */
+  debug?: string;
 }
 
 /**
@@ -115,6 +117,16 @@ export function extractThinking(raw: unknown): boolean | undefined {
     if (t === 'disabled') return false;
   }
   return undefined;
+}
+
+/**
+ * Extract a --debug category filter from the request. Returns undefined for
+ * unset, empty, or non-string values so the spawner can skip the flag.
+ */
+export function extractDebug(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**
@@ -214,6 +226,7 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   if (thinking !== undefined) {
     validateThinkingForModel(def, thinking);
   }
+  const debug = extractDebug(request.debug);
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -221,5 +234,6 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
     ...(effort ? { effort } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
+    ...(debug ? { debug } : {}),
   };
 }
