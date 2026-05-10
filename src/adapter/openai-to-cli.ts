@@ -39,6 +39,8 @@ export interface CliInput {
   debug?: string;
   /** Hard USD cap per request (print-mode only per Anthropic). */
   maxBudgetUsd?: number;
+  /** Permission mode for tool calls. Whitelist-validated. */
+  permissionMode?: ClaudePermissionMode;
 }
 
 /**
@@ -142,6 +144,48 @@ export function extractMaxBudgetUsd(raw: unknown): number | undefined {
   return raw > 0 ? raw : undefined;
 }
 
+export type ClaudePermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'plan'
+  | 'auto'
+  | 'dontAsk'
+  | 'bypassPermissions';
+
+const VALID_PERMISSION_MODES: ReadonlyArray<ClaudePermissionMode> = [
+  'default',
+  'acceptEdits',
+  'plan',
+  'auto',
+  'dontAsk',
+  'bypassPermissions',
+] as const;
+
+/**
+ * Extract and validate permission_mode. Returns undefined for unset values,
+ * throws ModelValidationError for any non-empty string that is not in the
+ * whitelist — strict: a typo or new mode that we have not declared support
+ * for must surface to the client, not silently fall back to the default.
+ */
+export function extractPermissionMode(raw: unknown): ClaudePermissionMode | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string') {
+    throw new ModelValidationError(
+      `permission_mode must be a string, got ${typeof raw}.`,
+      'permission_mode_invalid',
+    );
+  }
+  if (raw === '') return undefined;
+  if (!(VALID_PERMISSION_MODES as ReadonlyArray<string>).includes(raw)) {
+    throw new ModelValidationError(
+      `Unknown permission_mode '${raw}'. ` +
+      `Allowed: ${VALID_PERMISSION_MODES.join(', ')}.`,
+      'permission_mode_invalid',
+    );
+  }
+  return raw as ClaudePermissionMode;
+}
+
 /**
  * Strict semantic check: does this model support extended thinking at all?
  * Throws when thinking is requested for a model whose registry entry says no
@@ -241,6 +285,7 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   }
   const debug = extractDebug(request.debug);
   const maxBudgetUsd = extractMaxBudgetUsd(request.max_budget_usd);
+  const permissionMode = extractPermissionMode(request.permission_mode);
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -250,5 +295,6 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(thinking !== undefined ? { thinking } : {}),
     ...(debug ? { debug } : {}),
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
   };
 }

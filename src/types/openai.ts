@@ -76,6 +76,12 @@ export interface OpenAIChatRequest {
    * silently no-op in stream-json runs (CLI rejects the flag).
    */
   max_budget_usd?: number;
+  /**
+   * Permission mode for tool calls. Mapped to claude --permission-mode.
+   * Whitelist: default | acceptEdits | plan | auto | dontAsk | bypassPermissions.
+   * Strict — unknown values yield HTTP 400 invalid_request_error.
+   */
+  permission_mode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -251,6 +257,10 @@ export interface ResponsesRequest {
    * claude --max-budget-usd. Print-mode only per Anthropic docs.
    */
   max_budget_usd?: number;
+  /**
+   * Permission mode for tool calls. Mapped to claude --permission-mode.
+   */
+  permission_mode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
