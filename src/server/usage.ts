@@ -25,6 +25,13 @@ export function usageFromClaudeResult(result: ClaudeCliResult): ClaudeTokenUsage
 }
 
 export function modelFromResult(result: ClaudeCliResult, requestedModel: string): string {
+  // Prefer what the caller intended over what claude CLI reports. claude --print
+  // emits whichever model the inner subprocess was bound to, which is sometimes
+  // a default/cached value rather than the model the request actually selected.
+  // Falls back to modelUsage if requestedModel is empty (defensive only — the
+  // routes layer always passes cliInput.model).
+  const intended = (requestedModel || "").trim();
+  if (intended) return normalizeModel(intended);
   const modelUsageModel = result.modelUsage ? Object.keys(result.modelUsage)[0] : "";
-  return normalizeModel(modelUsageModel || requestedModel);
+  return normalizeModel(modelUsageModel);
 }
