@@ -37,6 +37,7 @@ import type { TraceMcpDecision } from "../trace/types.js";
 import { parseStreamJsonLine } from "./stream-json-parser.js";
 import { pushClaudeFlagIfSupported, supportsClaudeFlag } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
+import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 
 const INIT_TIMEOUT_MS = 30000;
 const TURN_TIMEOUT_MS = 900000;
@@ -114,6 +115,8 @@ export interface StreamJsonOptions {
   debug?: string;
   /** Hard USD cap; print-mode only. */
   maxBudgetUsd?: number;
+  /** Permission mode for tool calls. Whitelist-validated at adapter layer. */
+  permissionMode?: ClaudePermissionMode;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -180,6 +183,12 @@ export class StreamJsonSubprocess extends EventEmitter {
     // still call pushClaudeFlagIfSupported so the cache stays accurate).
     if (options.maxBudgetUsd !== undefined) {
       await pushClaudeFlagIfSupported(args, "--max-budget-usd", { value: String(options.maxBudgetUsd) });
+    }
+
+    // Permission mode (e.g. plan, bypassPermissions). Already whitelist-
+    // validated at the adapter; the spawner only checks CLI capability.
+    if (options.permissionMode) {
+      await pushClaudeFlagIfSupported(args, "--permission-mode", { value: options.permissionMode });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");

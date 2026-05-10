@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { StreamJsonSubprocess } from "./stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
+import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { acquirePreInit } from "./init-pool.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { messagesToPrompt } from "../adapter/openai-to-cli.js";
@@ -27,6 +28,8 @@ export interface StickySessionFingerprint {
   effortKey: string;
   /** Thinking toggle as a fingerprint key; empty string when no thinking override was set. */
   thinkingKey: string;
+  /** Permission mode as a fingerprint key; empty string when no override. */
+  permissionModeKey: string;
   mcpPolicyKey: string;
   cwd: string;
   dynamicPromptExclusion: boolean;
@@ -70,6 +73,8 @@ export interface StickyAcquireOptions {
   debug?: string;
   /** Hard USD cap; not part of the fingerprint. */
   maxBudgetUsd?: number;
+  /** Permission mode; part of the fingerprint. */
+  permissionMode?: ClaudePermissionMode;
   mcpPolicyKey?: string;
   cwd?: string;
   dynamicPromptExclusion?: boolean;
@@ -151,6 +156,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     disallowedToolsKey: disallowedToolsKey(options.disallowedTools),
     effortKey: options.effort ?? "",
     thinkingKey: options.thinking === undefined ? "" : (options.thinking ? "on" : "off"),
+    permissionModeKey: options.permissionMode ?? "",
     mcpPolicyKey: options.mcpPolicyKey || defaultMcpPolicyKey(),
     cwd: options.cwd || process.cwd(),
     dynamicPromptExclusion: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1" || options.dynamicPromptExclusion === true,
@@ -193,7 +199,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -262,10 +268,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode });
   return subprocess;
 }
 

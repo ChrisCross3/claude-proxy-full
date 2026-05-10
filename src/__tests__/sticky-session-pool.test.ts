@@ -21,6 +21,7 @@ test("internal key changes across model and tool policy", () => {
     disallowedToolsKey: "",
     effortKey: "",
     thinkingKey: "",
+    permissionModeKey: "",
     mcpPolicyKey: "mcp:on",
     cwd: "/tmp/proxy",
     dynamicPromptExclusion: true,
@@ -30,11 +31,13 @@ test("internal key changes across model and tool policy", () => {
   const differentTools = buildStickyInternalKey({ ...base, disallowedToolsKey: "mcp__n8n__list" });
   const differentEffort = buildStickyInternalKey({ ...base, effortKey: "high" });
   const differentThinking = buildStickyInternalKey({ ...base, thinkingKey: "on" });
+  const differentPermMode = buildStickyInternalKey({ ...base, permissionModeKey: "plan" });
   assert.equal(same, buildStickyInternalKey(base));
   assert.notEqual(same, differentModel);
   assert.notEqual(same, differentTools);
   assert.notEqual(same, differentEffort, "effortKey must be part of the sticky fingerprint");
   assert.notEqual(same, differentThinking, "thinkingKey must be part of the sticky fingerprint");
+  assert.notEqual(same, differentPermMode, "permissionModeKey must be part of the sticky fingerprint");
   assert.match(same, /^[a-f0-9]{64}$/);
 });
 

@@ -24,6 +24,7 @@
 import { createHash } from "crypto";
 import { StreamJsonSubprocess } from "./stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
+import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { acquirePreInit } from "./init-pool.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import type { OpenAIChatMessage, OpenAIMessageContent } from "../types/openai.js";
@@ -65,6 +66,8 @@ interface SlotFingerprint {
   effortKey: string;
   /** Thinking toggle as a fingerprint key; empty string when no thinking override was set. */
   thinkingKey: string;
+  /** Permission mode as a fingerprint key; empty string when no override. */
+  permissionModeKey: string;
 }
 
 interface AcquireOptions {
@@ -77,6 +80,8 @@ interface AcquireOptions {
   debug?: string;
   /** Hard USD cap; not part of the fingerprint (per-call enforcement, no init-state). */
   maxBudgetUsd?: number;
+  /** Permission mode; part of the fingerprint (changes claude init-state). */
+  permissionMode?: ClaudePermissionMode;
 }
 
 function disallowedToolsKey(disallowedTools: string[] = []): string {
@@ -90,6 +95,10 @@ function effortKey(effort?: ClaudeEffort): string {
 function thinkingKey(thinking?: boolean): string {
   if (thinking === undefined) return "";
   return thinking ? "on" : "off";
+}
+
+function permissionModeKey(mode?: ClaudePermissionMode): string {
+  return mode ?? "";
 }
 
 // Bounded counters for /metrics. Module-scoped; the metrics endpoint reads
@@ -134,8 +143,9 @@ export async function acquireSession(
   const disallowedKey = disallowedToolsKey(options.disallowedTools);
   const effortStr = effortKey(options.effort);
   const thinkingStr = thinkingKey(options.thinking);
-  const priorKey = hashConversation(model, messages.slice(0, -1), disallowedKey, effortStr, thinkingStr);
-  const postTurnKey = hashConversation(model, messages, disallowedKey, effortStr, thinkingStr); // before assistant response — see note below
+  const permModeStr = permissionModeKey(options.permissionMode);
+  const priorKey = hashConversation(model, messages.slice(0, -1), disallowedKey, effortStr, thinkingStr, permModeStr);
+  const postTurnKey = hashConversation(model, messages, disallowedKey, effortStr, thinkingStr, permModeStr); // before assistant response — see note below
 
   const slot = slots.get(priorKey);
   if (slot) {
@@ -144,6 +154,7 @@ export async function acquireSession(
       && slot.fingerprint.disallowedToolsKey === disallowedKey
       && slot.fingerprint.effortKey === effortStr
       && slot.fingerprint.thinkingKey === thinkingStr
+      && slot.fingerprint.permissionModeKey === permModeStr
       && slot.subprocess.getModel() === model;
     if (slot.subprocess.isHealthy() && fingerprintOk) {
       console.error(`[SessionPool] WARM HIT model=${model} key=${priorKey.slice(0, 8)}`);
@@ -186,9 +197,10 @@ async function cold(
     || !!options.effort
     || options.thinking !== undefined
     || !!options.debug
-    || options.maxBudgetUsd !== undefined;
+    || options.maxBudgetUsd !== undefined
+    || !!options.permissionMode;
   const sub = needsDedicated
-    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug, options.maxBudgetUsd)
+    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode)
     : await acquirePreInit(model);
 
   return {
@@ -196,13 +208,13 @@ async function cold(
     isWarm: false,
     flattenedPrompt: messagesToFlatPrompt(messages),
     lastUserText: extractText(messages[messages.length - 1].content),
-    postTurnKey: postTurnKey ?? hashConversation(model, messages, disallowedToolsKey(options.disallowedTools), effortKey(options.effort), thinkingKey(options.thinking)),
+    postTurnKey: postTurnKey ?? hashConversation(model, messages, disallowedToolsKey(options.disallowedTools), effortKey(options.effort), thinkingKey(options.thinking), permissionModeKey(options.permissionMode)),
   };
 }
 
-async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number): Promise<StreamJsonSubprocess> {
+async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode): Promise<StreamJsonSubprocess> {
   const sub = new StreamJsonSubprocess();
-  await sub.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd });
+  await sub.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode });
   return sub;
 }
 
@@ -233,12 +245,13 @@ export function returnSession(
   const disallowedKey = disallowedToolsKey(options.disallowedTools);
   const effortStr = effortKey(options.effort);
   const thinkingStr = thinkingKey(options.thinking);
-  const postKey = hashConversation(model, fullMessages, disallowedKey, effortStr, thinkingStr);
+  const permModeStr = permissionModeKey(options.permissionMode);
+  const postKey = hashConversation(model, fullMessages, disallowedKey, effortStr, thinkingStr, permModeStr);
   slots.set(postKey, {
     subprocess,
     key: postKey,
     lastUsedAt: Date.now(),
-    fingerprint: { model, disallowedToolsKey: disallowedKey, effortKey: effortStr, thinkingKey: thinkingStr },
+    fingerprint: { model, disallowedToolsKey: disallowedKey, effortKey: effortStr, thinkingKey: thinkingStr, permissionModeKey: permModeStr },
   });
   console.error(`[SessionPool] Returned subprocess under key ${postKey.slice(0, 8)} (size=${slots.size}/${MAX_SESSIONS})`);
 }
@@ -280,7 +293,7 @@ function evictLRU(): void {
   }
 }
 
-function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], disallowedKey: string = "", effortLevel: string = "", thinkingLevel: string = ""): string {
+function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], disallowedKey: string = "", effortLevel: string = "", thinkingLevel: string = "", permissionModeLevel: string = ""): string {
   // Ignore assistant content: the live subprocess already remembers what *it*
   // said. The incoming OpenAI history may differ in whitespace/punctuation
   // (e.g. trailing period stripped by clients) and we don't want that to bust
@@ -293,6 +306,8 @@ function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], dis
   h.update(effortLevel);
   h.update("\0thinking\0");
   h.update(thinkingLevel);
+  h.update("\0permmode\0");
+  h.update(permissionModeLevel);
   for (const m of messages) {
     h.update("\0");
     h.update(m.role);

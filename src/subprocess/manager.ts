@@ -8,6 +8,7 @@
 import { spawn, ChildProcess } from "child_process";
 import { supportsClaudeFlag } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
+import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { EventEmitter } from "events";
 import fs from "fs/promises";
 import path from "path";
@@ -41,6 +42,8 @@ export interface SubprocessOptions {
   debug?: string;
   /** Hard USD cap; print-mode only. */
   maxBudgetUsd?: number;
+  /** Permission mode for tool calls. Whitelist-validated at adapter layer. */
+  permissionMode?: ClaudePermissionMode;
 }
 
 export interface SubprocessEvents {
@@ -255,6 +258,14 @@ export class ClaudeSubprocess extends EventEmitter {
       const supported = await supportsClaudeFlag("--max-budget-usd");
       if (supported) {
         args.push("--max-budget-usd", String(options.maxBudgetUsd));
+      }
+    }
+
+    // Permission mode for tool calls. Whitelist-validated at adapter layer.
+    if (options.permissionMode) {
+      const supported = await supportsClaudeFlag("--permission-mode");
+      if (supported) {
+        args.push("--permission-mode", options.permissionMode);
       }
     }
 

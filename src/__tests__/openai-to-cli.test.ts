@@ -6,6 +6,7 @@ import {
   extractThinking,
   extractDebug,
   extractMaxBudgetUsd,
+  extractPermissionMode,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
@@ -357,4 +358,47 @@ test("openaiToCli drops invalid max_budget_usd silently", () => {
     max_budget_usd: -1,
   };
   assert.equal(openaiToCli(req as any).maxBudgetUsd, undefined);
+});
+
+
+// --- extractPermissionMode: strict whitelist ---
+
+test("extractPermissionMode accepts all six documented modes", () => {
+  for (const mode of ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"] as const) {
+    assert.equal(extractPermissionMode(mode), mode);
+  }
+});
+
+test("extractPermissionMode returns undefined for unset / empty", () => {
+  assert.equal(extractPermissionMode(undefined), undefined);
+  assert.equal(extractPermissionMode(null), undefined);
+  assert.equal(extractPermissionMode(""), undefined);
+});
+
+test("extractPermissionMode throws on unknown strings (strict whitelist)", () => {
+  assert.throws(() => extractPermissionMode("yolo"), /Unknown permission_mode/);
+  assert.throws(() => extractPermissionMode("DEFAULT"), /Unknown permission_mode/); // case-sensitive
+});
+
+test("extractPermissionMode throws on non-string non-empty input", () => {
+  assert.throws(() => extractPermissionMode(123), /permission_mode must be a string/);
+  assert.throws(() => extractPermissionMode(true), /permission_mode must be a string/);
+});
+
+test("openaiToCli passes permission_mode through as permissionMode", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    permission_mode: "plan" as const,
+  };
+  assert.equal(openaiToCli(req as any).permissionMode, "plan");
+});
+
+test("openaiToCli throws on unknown permission_mode (HTTP 400 path)", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    permission_mode: "yolo",
+  };
+  assert.throws(() => openaiToCli(req as any), /Unknown permission_mode/);
 });
