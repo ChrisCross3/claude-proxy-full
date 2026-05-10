@@ -250,10 +250,23 @@ export async function handleChatCompletions(
   const reqStart = Date.now();
   let usedRuntime: "stream-json" | "print" = "stream-json";
 
+  // Resolve the model defensively: registry throws on unknown ids, which is a
+  // client error, not a server crash. Catch before the trace builder runs.
+  let resolvedModel: string;
+  try {
+    resolvedModel = extractModel(body.model);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown model";
+    res.status(400).json({
+      error: { message, type: "invalid_request_error", code: "unknown_model" },
+    });
+    return;
+  }
+
   const tb = createTraceBuilder({
     traceId,
     requestId,
-    model: extractModel(body.model),
+    model: resolvedModel,
     requestedModel: body.model || "unknown",
     stream,
     endpoint: "chat.completions",
@@ -582,7 +595,7 @@ async function handleNonStreamingResponse(
       if (finalResult) {
         annotateAndRecordUsage(finalResult, cliInput.model);
         setUsageHeaders(res, finalResult);
-        const response = cliResultToOpenai(finalResult, requestId, body);
+        const response = cliResultToOpenai(finalResult, requestId, body, cliInput.model);
         const finishReason = response.choices[0]?.finish_reason || "stop";
         tb.setFinishReason(finishReason as "stop" | "tool_calls");
         if (response.choices[0]?.message.tool_calls) {
@@ -944,7 +957,7 @@ async function handleStreamJsonRequest(
       res.end();
     } else if (!stream && !res.headersSent) {
       setUsageHeaders(res, result);
-      res.json(cliResultToOpenai(result, requestId, body));
+      res.json(cliResultToOpenai(result, requestId, body, cliInput.model));
     }
 
     // Re-pool or retain the subprocess for the next turn according to session mode.
@@ -1268,7 +1281,7 @@ async function handleResponsesStreamJson(
       }
       res.end();
     } else if (!stream && !res.headersSent) {
-      const chatResponse = cliResultToOpenai(resultForAdapters, requestId, chatReq);
+      const chatResponse = cliResultToOpenai(resultForAdapters, requestId, chatReq, cliInput.model);
       res.json(chatResponseToResponses(chatResponse, requestId));
     }
   } catch (error) {
@@ -1322,7 +1335,7 @@ async function handleResponsesNonStreaming(
     subprocess.on("close", (code: number | null) => {
       if (finalResult) {
         annotateAndRecordUsage(finalResult, cliInput.model);
-        const chatResponse = cliResultToOpenai(finalResult, requestId, chatReq);
+        const chatResponse = cliResultToOpenai(finalResult, requestId, chatReq, cliInput.model);
         const responsesResponse = chatResponseToResponses(chatResponse, requestId);
         const hasToolCalls = chatResponse.choices[0]?.message?.tool_calls && chatResponse.choices[0].message.tool_calls.length > 0;
         const finishReason = hasToolCalls ? "tool_calls" as const : (chatResponse.choices[0]?.finish_reason as "stop" | "tool_calls" || "stop");
