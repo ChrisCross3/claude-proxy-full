@@ -104,6 +104,30 @@ export interface OpenAIChatRequest {
    * other shapes (string, array, primitive) throw HTTP 400 invalid_request_error.
    */
   agents?: Record<string, unknown>;
+  /**
+   * Minimal-mode spawn. Mapped to claude --bare. Skips hooks, skills, plugins,
+   * MCP, auto-memory, and CLAUDE.md discovery — leaves only Bash, file read,
+   * and file edit available. Faster startup, deterministic context, fewer surprises.
+   */
+  bare?: boolean;
+  /**
+   * Disable all slash commands in the subprocess. Mapped to
+   * claude --disable-slash-commands. Prevents user prompts that begin with
+   * '/' from being misinterpreted as commands.
+   */
+  disable_slash_commands?: boolean;
+  /**
+   * JSON Schema the assistant's final answer must conform to. Mapped to
+   * claude --json-schema (print-mode only). Must be a plain JSON object;
+   * other shapes yield HTTP 400 invalid_request_error.
+   */
+  json_schema?: Record<string, unknown>;
+  /**
+   * Hard cap on the number of agentic turns the subprocess may take before
+   * stopping. Mapped to claude --max-turns (print-mode only). Positive
+   * integer; non-integer/zero/negative values are silently dropped.
+   */
+  max_turns?: number;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -291,6 +315,14 @@ export interface ResponsesRequest {
   agent?: string;
   /** Define ad-hoc subagents inline as a JSON object. */
   agents?: Record<string, unknown>;
+  /** Minimal-mode spawn (claude --bare). */
+  bare?: boolean;
+  /** Disable slash commands in the subprocess. */
+  disable_slash_commands?: boolean;
+  /** JSON Schema the response must conform to (print-mode only). */
+  json_schema?: Record<string, unknown>;
+  /** Cap agentic turns (print-mode only). */
+  max_turns?: number;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 

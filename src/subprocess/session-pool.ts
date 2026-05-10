@@ -72,6 +72,8 @@ interface SlotFingerprint {
   systemPromptKey: string;
   /** SHA-256 hex prefix of (agent + 0x1F + JSON.stringify(agents)); empty when both unset. */
   agentsKey: string;
+  /** Combined key for --bare and --disable-slash-commands; e.g. "b1s0" / "b0s1" / "b1s1" / "" when none. */
+  modesKey: string;
 }
 
 interface AcquireOptions {
@@ -94,6 +96,14 @@ interface AcquireOptions {
   agent?: string;
   /** Ad-hoc subagent definitions; part of the fingerprint. */
   agents?: Record<string, unknown>;
+  /** Minimal-mode; part of the fingerprint (changes init dramatically). */
+  bare?: boolean;
+  /** Disable slash commands; part of the fingerprint (changes subprocess behavior). */
+  disableSlashCommands?: boolean;
+  /** JSON Schema; not part of the fingerprint (per-call output constraint). */
+  jsonSchema?: Record<string, unknown>;
+  /** Max turns cap; not part of the fingerprint (per-call enforcement). */
+  maxTurns?: number;
 }
 
 function disallowedToolsKey(disallowedTools: string[] = []): string {
@@ -129,6 +139,11 @@ function agentsKey(agent?: string, agents?: Record<string, unknown>): string {
   h.update("\x1f");
   h.update(agents ? JSON.stringify(agents) : "");
   return h.digest("hex").slice(0, 16);
+}
+
+function modesKey(bare?: boolean, disableSlashCommands?: boolean): string {
+  if (!bare && !disableSlashCommands) return "";
+  return `b${bare ? 1 : 0}s${disableSlashCommands ? 1 : 0}`;
 }
 
 // Bounded counters for /metrics. Module-scoped; the metrics endpoint reads
@@ -176,8 +191,9 @@ export async function acquireSession(
   const permModeStr = permissionModeKey(options.permissionMode);
   const sysPromptStr = systemPromptKey(options.systemPrompt, options.appendSystemPrompt);
   const agentsStr = agentsKey(options.agent, options.agents);
-  const priorKey = hashConversation(model, messages.slice(0, -1), disallowedKey, effortStr, thinkingStr, permModeStr, sysPromptStr, agentsStr);
-  const postTurnKey = hashConversation(model, messages, disallowedKey, effortStr, thinkingStr, permModeStr, sysPromptStr, agentsStr); // before assistant response — see note below
+  const modesStr = modesKey(options.bare, options.disableSlashCommands);
+  const priorKey = hashConversation(model, messages.slice(0, -1), disallowedKey, effortStr, thinkingStr, permModeStr, sysPromptStr, agentsStr, modesStr);
+  const postTurnKey = hashConversation(model, messages, disallowedKey, effortStr, thinkingStr, permModeStr, sysPromptStr, agentsStr, modesStr); // before assistant response — see note below
 
   const slot = slots.get(priorKey);
   if (slot) {
@@ -189,6 +205,7 @@ export async function acquireSession(
       && slot.fingerprint.permissionModeKey === permModeStr
       && slot.fingerprint.systemPromptKey === sysPromptStr
       && slot.fingerprint.agentsKey === agentsStr
+      && slot.fingerprint.modesKey === modesStr
       && slot.subprocess.getModel() === model;
     if (slot.subprocess.isHealthy() && fingerprintOk) {
       console.error(`[SessionPool] WARM HIT model=${model} key=${priorKey.slice(0, 8)}`);
@@ -236,9 +253,13 @@ async function cold(
     || !!options.systemPrompt
     || !!options.appendSystemPrompt
     || !!options.agent
-    || !!options.agents;
+    || !!options.agents
+    || !!options.bare
+    || !!options.disableSlashCommands
+    || !!options.jsonSchema
+    || options.maxTurns !== undefined;
   const sub = needsDedicated
-    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents)
+    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents, options.bare, options.disableSlashCommands, options.jsonSchema, options.maxTurns)
     : await acquirePreInit(model);
 
   return {
@@ -246,13 +267,13 @@ async function cold(
     isWarm: false,
     flattenedPrompt: messagesToFlatPrompt(messages),
     lastUserText: extractText(messages[messages.length - 1].content),
-    postTurnKey: postTurnKey ?? hashConversation(model, messages, disallowedToolsKey(options.disallowedTools), effortKey(options.effort), thinkingKey(options.thinking), permissionModeKey(options.permissionMode), systemPromptKey(options.systemPrompt, options.appendSystemPrompt), agentsKey(options.agent, options.agents)),
+    postTurnKey: postTurnKey ?? hashConversation(model, messages, disallowedToolsKey(options.disallowedTools), effortKey(options.effort), thinkingKey(options.thinking), permissionModeKey(options.permissionMode), systemPromptKey(options.systemPrompt, options.appendSystemPrompt), agentsKey(options.agent, options.agents), modesKey(options.bare, options.disableSlashCommands)),
   };
 }
 
-async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>): Promise<StreamJsonSubprocess> {
+async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number): Promise<StreamJsonSubprocess> {
   const sub = new StreamJsonSubprocess();
-  await sub.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents });
+  await sub.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns });
   return sub;
 }
 
@@ -286,12 +307,13 @@ export function returnSession(
   const permModeStr = permissionModeKey(options.permissionMode);
   const sysPromptStr = systemPromptKey(options.systemPrompt, options.appendSystemPrompt);
   const agentsStr = agentsKey(options.agent, options.agents);
-  const postKey = hashConversation(model, fullMessages, disallowedKey, effortStr, thinkingStr, permModeStr, sysPromptStr, agentsStr);
+  const modesStr = modesKey(options.bare, options.disableSlashCommands);
+  const postKey = hashConversation(model, fullMessages, disallowedKey, effortStr, thinkingStr, permModeStr, sysPromptStr, agentsStr, modesStr);
   slots.set(postKey, {
     subprocess,
     key: postKey,
     lastUsedAt: Date.now(),
-    fingerprint: { model, disallowedToolsKey: disallowedKey, effortKey: effortStr, thinkingKey: thinkingStr, permissionModeKey: permModeStr, systemPromptKey: sysPromptStr, agentsKey: agentsStr },
+    fingerprint: { model, disallowedToolsKey: disallowedKey, effortKey: effortStr, thinkingKey: thinkingStr, permissionModeKey: permModeStr, systemPromptKey: sysPromptStr, agentsKey: agentsStr, modesKey: modesStr },
   });
   console.error(`[SessionPool] Returned subprocess under key ${postKey.slice(0, 8)} (size=${slots.size}/${MAX_SESSIONS})`);
 }
@@ -333,7 +355,7 @@ function evictLRU(): void {
   }
 }
 
-function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], disallowedKey: string = "", effortLevel: string = "", thinkingLevel: string = "", permissionModeLevel: string = "", systemPromptLevel: string = "", agentsLevel: string = ""): string {
+function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], disallowedKey: string = "", effortLevel: string = "", thinkingLevel: string = "", permissionModeLevel: string = "", systemPromptLevel: string = "", agentsLevel: string = "", modesLevel: string = ""): string {
   // Ignore assistant content: the live subprocess already remembers what *it*
   // said. The incoming OpenAI history may differ in whitespace/punctuation
   // (e.g. trailing period stripped by clients) and we don't want that to bust
@@ -352,6 +374,8 @@ function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], dis
   h.update(systemPromptLevel);
   h.update("\0agents\0");
   h.update(agentsLevel);
+  h.update("\0modes\0");
+  h.update(modesLevel);
   for (const m of messages) {
     h.update("\0");
     h.update(m.role);

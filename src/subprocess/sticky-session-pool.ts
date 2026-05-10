@@ -34,6 +34,8 @@ export interface StickySessionFingerprint {
   systemPromptKey: string;
   /** SHA-256 hex prefix of (agent + 0x1F + JSON.stringify(agents)); empty when both unset. */
   agentsKey: string;
+  /** Combined key for --bare / --disable-slash-commands. */
+  modesKey: string;
   mcpPolicyKey: string;
   cwd: string;
   dynamicPromptExclusion: boolean;
@@ -87,6 +89,14 @@ export interface StickyAcquireOptions {
   agent?: string;
   /** Ad-hoc subagent definitions; part of the fingerprint. */
   agents?: Record<string, unknown>;
+  /** Minimal-mode spawn; part of the fingerprint. */
+  bare?: boolean;
+  /** Disable slash commands; part of the fingerprint. */
+  disableSlashCommands?: boolean;
+  /** JSON Schema; not part of the fingerprint. */
+  jsonSchema?: Record<string, unknown>;
+  /** Max turns; not part of the fingerprint. */
+  maxTurns?: number;
   mcpPolicyKey?: string;
   cwd?: string;
   dynamicPromptExclusion?: boolean;
@@ -158,6 +168,11 @@ function hashAgents(agent?: string, agents?: Record<string, unknown>): string {
   return h.digest("hex").slice(0, 16);
 }
 
+function hashModes(bare?: boolean, disableSlashCommands?: boolean): string {
+  if (!bare && !disableSlashCommands) return "";
+  return `b${bare ? 1 : 0}s${disableSlashCommands ? 1 : 0}`;
+}
+
 export function parseStickyTtlMs(ttlSeconds: number): number {
   return Math.max(1, Math.trunc(ttlSeconds)) * 1000;
 }
@@ -189,6 +204,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     permissionModeKey: options.permissionMode ?? "",
     systemPromptKey: hashSystemPrompts(options.systemPrompt, options.appendSystemPrompt),
     agentsKey: hashAgents(options.agent, options.agents),
+    modesKey: hashModes(options.bare, options.disableSlashCommands),
     mcpPolicyKey: options.mcpPolicyKey || defaultMcpPolicyKey(),
     cwd: options.cwd || process.cwd(),
     dynamicPromptExclusion: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1" || options.dynamicPromptExclusion === true,
@@ -231,7 +247,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents, options.bare, options.disableSlashCommands, options.jsonSchema, options.maxTurns);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -300,10 +316,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns });
   return subprocess;
 }
 

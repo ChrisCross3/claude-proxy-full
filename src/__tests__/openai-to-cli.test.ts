@@ -11,6 +11,10 @@ import {
   extractAppendSystemPrompt,
   extractAgent,
   extractAgents,
+  extractBare,
+  extractDisableSlashCommands,
+  extractJsonSchema,
+  extractMaxTurns,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
@@ -501,4 +505,88 @@ test("openaiToCli throws when agents is an array (HTTP 400 path)", () => {
     agents: [{ reviewer: { prompt: "x" } }],
   };
   assert.throws(() => openaiToCli(req as any), /agents must be a JSON object/);
+});
+
+
+// --- extractBare / extractDisableSlashCommands ---
+
+test("extractBare returns boolean true/false unchanged", () => {
+  assert.equal(extractBare(true), true);
+  assert.equal(extractBare(false), false);
+});
+
+test("extractBare returns undefined for unset / non-boolean", () => {
+  assert.equal(extractBare(undefined), undefined);
+  assert.equal(extractBare(null), undefined);
+  assert.equal(extractBare("true"), undefined);
+  assert.equal(extractBare(1), undefined);
+});
+
+test("extractDisableSlashCommands has the same shape as extractBare", () => {
+  assert.equal(extractDisableSlashCommands(true), true);
+  assert.equal(extractDisableSlashCommands(false), false);
+  assert.equal(extractDisableSlashCommands("yes"), undefined);
+});
+
+// --- extractJsonSchema ---
+
+test("extractJsonSchema accepts a non-empty plain object", () => {
+  const schema = { type: "object", properties: {} };
+  assert.deepEqual(extractJsonSchema(schema), schema);
+});
+
+test("extractJsonSchema returns undefined for unset", () => {
+  assert.equal(extractJsonSchema(undefined), undefined);
+  assert.equal(extractJsonSchema(null), undefined);
+});
+
+test("extractJsonSchema throws on empty object, array, primitive, string", () => {
+  assert.throws(() => extractJsonSchema({}), /non-empty schema object/);
+  assert.throws(() => extractJsonSchema([]), /json_schema must be a JSON object/);
+  assert.throws(() => extractJsonSchema("schema"), /json_schema must be a JSON object/);
+  assert.throws(() => extractJsonSchema(42), /json_schema must be a JSON object/);
+});
+
+// --- extractMaxTurns ---
+
+test("extractMaxTurns accepts positive integers", () => {
+  assert.equal(extractMaxTurns(1), 1);
+  assert.equal(extractMaxTurns(5), 5);
+  assert.equal(extractMaxTurns(100), 100);
+});
+
+test("extractMaxTurns rejects zero, negative, fractional, infinity, non-number", () => {
+  assert.equal(extractMaxTurns(0), undefined);
+  assert.equal(extractMaxTurns(-1), undefined);
+  assert.equal(extractMaxTurns(1.5), undefined);
+  assert.equal(extractMaxTurns(NaN), undefined);
+  assert.equal(extractMaxTurns(Infinity), undefined);
+  assert.equal(extractMaxTurns("5"), undefined);
+});
+
+// --- openaiToCli end-to-end ---
+
+test("openaiToCli forwards bare + disable_slash_commands + json_schema + max_turns", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    bare: true,
+    disable_slash_commands: true,
+    json_schema: { type: "object", properties: { answer: { type: "string" } } },
+    max_turns: 3,
+  };
+  const cli = openaiToCli(req as any);
+  assert.equal(cli.bare, true);
+  assert.equal(cli.disableSlashCommands, true);
+  assert.deepEqual(cli.jsonSchema, req.json_schema);
+  assert.equal(cli.maxTurns, 3);
+});
+
+test("openaiToCli throws on invalid json_schema (HTTP 400)", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    json_schema: "not an object",
+  };
+  assert.throws(() => openaiToCli(req as any), /json_schema must be a JSON object/);
 });

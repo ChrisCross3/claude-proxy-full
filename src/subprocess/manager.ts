@@ -52,6 +52,14 @@ export interface SubprocessOptions {
   agent?: string;
   /** Ad-hoc subagent definitions; mapped to claude --agents <JSON>. */
   agents?: Record<string, unknown>;
+  /** Minimal-mode spawn (claude --bare). Part of fingerprint (changes init). */
+  bare?: boolean;
+  /** Disable slash commands in subprocess. Part of fingerprint. */
+  disableSlashCommands?: boolean;
+  /** JSON Schema for structured output (print-mode only). Not in fingerprint. */
+  jsonSchema?: Record<string, unknown>;
+  /** Cap agentic turns (print-mode only). Not in fingerprint. */
+  maxTurns?: number;
 }
 
 export interface SubprocessEvents {
@@ -302,6 +310,35 @@ export class ClaudeSubprocess extends EventEmitter {
       const supported = await supportsClaudeFlag("--agents");
       if (supported) {
         args.push("--agents", JSON.stringify(options.agents));
+      }
+    }
+
+    // Minimal-mode spawn.
+    if (options.bare) {
+      const supported = await supportsClaudeFlag("--bare");
+      if (supported) {
+        args.push("--bare");
+      }
+    }
+    // Disable slash commands.
+    if (options.disableSlashCommands) {
+      const supported = await supportsClaudeFlag("--disable-slash-commands");
+      if (supported) {
+        args.push("--disable-slash-commands");
+      }
+    }
+    // JSON Schema for structured output.
+    if (options.jsonSchema) {
+      const supported = await supportsClaudeFlag("--json-schema");
+      if (supported) {
+        args.push("--json-schema", JSON.stringify(options.jsonSchema));
+      }
+    }
+    // Cap on agentic turns.
+    if (options.maxTurns !== undefined) {
+      const supported = await supportsClaudeFlag("--max-turns");
+      if (supported) {
+        args.push("--max-turns", String(options.maxTurns));
       }
     }
 

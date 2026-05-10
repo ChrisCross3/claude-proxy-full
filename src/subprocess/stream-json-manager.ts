@@ -125,6 +125,14 @@ export interface StreamJsonOptions {
   agent?: string;
   /** Ad-hoc subagent definitions; mapped to claude --agents <JSON>. */
   agents?: Record<string, unknown>;
+  /** Minimal-mode spawn (claude --bare). Part of fingerprint (changes init). */
+  bare?: boolean;
+  /** Disable slash commands in subprocess. Part of fingerprint. */
+  disableSlashCommands?: boolean;
+  /** JSON Schema for structured output (print-mode only). Not in fingerprint. */
+  jsonSchema?: Record<string, unknown>;
+  /** Cap agentic turns (print-mode only). Not in fingerprint. */
+  maxTurns?: number;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -216,6 +224,24 @@ export class StreamJsonSubprocess extends EventEmitter {
     }
     if (options.agents) {
       await pushClaudeFlagIfSupported(args, "--agents", { value: JSON.stringify(options.agents) });
+    }
+
+    // Minimal-mode spawn: skip hooks/skills/plugins/MCP/auto-memory/CLAUDE.md
+    // discovery. Sets CLAUDE_CODE_SIMPLE env in claude-CLI internally.
+    if (options.bare) {
+      await pushClaudeFlagIfSupported(args, "--bare");
+    }
+    // Disable slash commands in subprocess.
+    if (options.disableSlashCommands) {
+      await pushClaudeFlagIfSupported(args, "--disable-slash-commands");
+    }
+    // JSON Schema for structured output (print-mode only upstream).
+    if (options.jsonSchema) {
+      await pushClaudeFlagIfSupported(args, "--json-schema", { value: JSON.stringify(options.jsonSchema) });
+    }
+    // Cap on agentic turns (print-mode only upstream).
+    if (options.maxTurns !== undefined) {
+      await pushClaudeFlagIfSupported(args, "--max-turns", { value: String(options.maxTurns) });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");
