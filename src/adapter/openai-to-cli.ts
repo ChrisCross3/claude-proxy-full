@@ -41,6 +41,10 @@ export interface CliInput {
   maxBudgetUsd?: number;
   /** Permission mode for tool calls. Whitelist-validated. */
   permissionMode?: ClaudePermissionMode;
+  /** Replacement system prompt; mapped to claude --system-prompt. */
+  systemPrompt?: string;
+  /** Appended system prompt; mapped to claude --append-system-prompt. */
+  appendSystemPrompt?: string;
 }
 
 /**
@@ -131,6 +135,25 @@ export function extractDebug(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Extract a non-empty string for system prompt fields. Trims whitespace;
+ * returns undefined for unset, empty, or non-string inputs. Used for both
+ * system_prompt (replace) and append_system_prompt (append).
+ */
+function extractNonEmptyString(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function extractSystemPrompt(raw: unknown): string | undefined {
+  return extractNonEmptyString(raw);
+}
+
+export function extractAppendSystemPrompt(raw: unknown): string | undefined {
+  return extractNonEmptyString(raw);
 }
 
 /**
@@ -286,6 +309,8 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   const debug = extractDebug(request.debug);
   const maxBudgetUsd = extractMaxBudgetUsd(request.max_budget_usd);
   const permissionMode = extractPermissionMode(request.permission_mode);
+  const systemPrompt = extractSystemPrompt(request.system_prompt);
+  const appendSystemPrompt = extractAppendSystemPrompt(request.append_system_prompt);
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -296,5 +321,7 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(debug ? { debug } : {}),
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     ...(permissionMode ? { permissionMode } : {}),
+    ...(systemPrompt ? { systemPrompt } : {}),
+    ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
   };
 }

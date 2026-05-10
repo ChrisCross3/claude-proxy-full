@@ -30,6 +30,8 @@ export interface StickySessionFingerprint {
   thinkingKey: string;
   /** Permission mode as a fingerprint key; empty string when no override. */
   permissionModeKey: string;
+  /** SHA-256 hex prefix of (systemPrompt + 0x1F + appendSystemPrompt); empty when both unset. */
+  systemPromptKey: string;
   mcpPolicyKey: string;
   cwd: string;
   dynamicPromptExclusion: boolean;
@@ -75,6 +77,10 @@ export interface StickyAcquireOptions {
   maxBudgetUsd?: number;
   /** Permission mode; part of the fingerprint. */
   permissionMode?: ClaudePermissionMode;
+  /** Replacement system prompt; part of the fingerprint. */
+  systemPrompt?: string;
+  /** Appended system prompt; part of the fingerprint. */
+  appendSystemPrompt?: string;
   mcpPolicyKey?: string;
   cwd?: string;
   dynamicPromptExclusion?: boolean;
@@ -128,6 +134,15 @@ export function disallowedToolsKey(disallowedTools: string[] = []): string {
   return [...disallowedTools].sort().join(",");
 }
 
+function hashSystemPrompts(systemPrompt?: string, appendSystemPrompt?: string): string {
+  if (!systemPrompt && !appendSystemPrompt) return "";
+  const h = createHash("sha256");
+  h.update(systemPrompt ?? "");
+  h.update("\x1f");
+  h.update(appendSystemPrompt ?? "");
+  return h.digest("hex").slice(0, 16);
+}
+
 export function parseStickyTtlMs(ttlSeconds: number): number {
   return Math.max(1, Math.trunc(ttlSeconds)) * 1000;
 }
@@ -157,6 +172,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     effortKey: options.effort ?? "",
     thinkingKey: options.thinking === undefined ? "" : (options.thinking ? "on" : "off"),
     permissionModeKey: options.permissionMode ?? "",
+    systemPromptKey: hashSystemPrompts(options.systemPrompt, options.appendSystemPrompt),
     mcpPolicyKey: options.mcpPolicyKey || defaultMcpPolicyKey(),
     cwd: options.cwd || process.cwd(),
     dynamicPromptExclusion: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1" || options.dynamicPromptExclusion === true,
@@ -199,7 +215,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -268,10 +284,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt });
   return subprocess;
 }
 

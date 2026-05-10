@@ -22,6 +22,7 @@ test("internal key changes across model and tool policy", () => {
     effortKey: "",
     thinkingKey: "",
     permissionModeKey: "",
+    systemPromptKey: "",
     mcpPolicyKey: "mcp:on",
     cwd: "/tmp/proxy",
     dynamicPromptExclusion: true,
@@ -32,12 +33,14 @@ test("internal key changes across model and tool policy", () => {
   const differentEffort = buildStickyInternalKey({ ...base, effortKey: "high" });
   const differentThinking = buildStickyInternalKey({ ...base, thinkingKey: "on" });
   const differentPermMode = buildStickyInternalKey({ ...base, permissionModeKey: "plan" });
+  const differentSysPrompt = buildStickyInternalKey({ ...base, systemPromptKey: "abcdef1234567890" });
   assert.equal(same, buildStickyInternalKey(base));
   assert.notEqual(same, differentModel);
   assert.notEqual(same, differentTools);
   assert.notEqual(same, differentEffort, "effortKey must be part of the sticky fingerprint");
   assert.notEqual(same, differentThinking, "thinkingKey must be part of the sticky fingerprint");
   assert.notEqual(same, differentPermMode, "permissionModeKey must be part of the sticky fingerprint");
+  assert.notEqual(same, differentSysPrompt, "systemPromptKey must be part of the sticky fingerprint");
   assert.match(same, /^[a-f0-9]{64}$/);
 });
 

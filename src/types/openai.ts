@@ -82,6 +82,17 @@ export interface OpenAIChatRequest {
    * Strict — unknown values yield HTTP 400 invalid_request_error.
    */
   permission_mode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
+  /**
+   * Replace claude's default system prompt entirely. Mapped to
+   * claude --system-prompt. Combine with append_system_prompt to add
+   * task-specific rules after the replacement.
+   */
+  system_prompt?: string;
+  /**
+   * Append text to the (possibly already-replaced) system prompt.
+   * Mapped to claude --append-system-prompt.
+   */
+  append_system_prompt?: string;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -261,6 +272,10 @@ export interface ResponsesRequest {
    * Permission mode for tool calls. Mapped to claude --permission-mode.
    */
   permission_mode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
+  /** Replace claude's default system prompt entirely. */
+  system_prompt?: string;
+  /** Append text to the system prompt. */
+  append_system_prompt?: string;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
