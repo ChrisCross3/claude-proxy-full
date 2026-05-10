@@ -21,7 +21,7 @@ import {
 } from "../subprocess/sticky-session-pool.js";
 import { resolveSessionOptions, isSessionOptionsError, type ResolvedSessionOptions, type SessionOptionsError } from "./sticky-options.js";
 import { MODELS } from "../models/registry.js";
-import { extractModel, messagesToPrompt, openaiToCli } from "../adapter/openai-to-cli.js";
+import { extractModel, messagesToPrompt, openaiToCli, ModelValidationError } from "../adapter/openai-to-cli.js";
 import {
   cliResultToOpenai,
   createDoneChunk,
@@ -390,13 +390,23 @@ export async function handleChatCompletions(
     console.error("[handleChatCompletions] Error:", message);
 
     if (!res.headersSent) {
-      res.status(500).json({
-        error: {
-          message,
-          type: "server_error",
-          code: null,
-        },
-      });
+      if (error instanceof ModelValidationError) {
+        res.status(400).json({
+          error: {
+            message,
+            type: "invalid_request_error",
+            code: error.code,
+          },
+        });
+      } else {
+        res.status(500).json({
+          error: {
+            message,
+            type: "server_error",
+            code: null,
+          },
+        });
+      }
     }
   }
 }
