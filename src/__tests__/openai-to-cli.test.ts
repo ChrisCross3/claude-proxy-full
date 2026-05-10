@@ -5,6 +5,7 @@ import {
   extractEffort,
   extractThinking,
   extractDebug,
+  extractMaxBudgetUsd,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
@@ -318,4 +319,42 @@ test("openaiToCli omits debug when unset", () => {
     messages: [{ role: "user" as const, content: "x" }],
   };
   assert.equal(openaiToCli(req as any).debug, undefined);
+});
+
+
+// --- extractMaxBudgetUsd: optional positive number ---
+
+test("extractMaxBudgetUsd accepts positive finite numbers", () => {
+  assert.equal(extractMaxBudgetUsd(0.01), 0.01);
+  assert.equal(extractMaxBudgetUsd(5), 5);
+  assert.equal(extractMaxBudgetUsd(123.45), 123.45);
+});
+
+test("extractMaxBudgetUsd rejects zero, negative, NaN, infinity, and non-numbers", () => {
+  assert.equal(extractMaxBudgetUsd(0), undefined);
+  assert.equal(extractMaxBudgetUsd(-1), undefined);
+  assert.equal(extractMaxBudgetUsd(NaN), undefined);
+  assert.equal(extractMaxBudgetUsd(Infinity), undefined);
+  assert.equal(extractMaxBudgetUsd(-Infinity), undefined);
+  assert.equal(extractMaxBudgetUsd("5"), undefined);
+  assert.equal(extractMaxBudgetUsd(null), undefined);
+  assert.equal(extractMaxBudgetUsd(undefined), undefined);
+});
+
+test("openaiToCli passes max_budget_usd through as maxBudgetUsd", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    max_budget_usd: 1.5,
+  };
+  assert.equal(openaiToCli(req as any).maxBudgetUsd, 1.5);
+});
+
+test("openaiToCli drops invalid max_budget_usd silently", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    max_budget_usd: -1,
+  };
+  assert.equal(openaiToCli(req as any).maxBudgetUsd, undefined);
 });

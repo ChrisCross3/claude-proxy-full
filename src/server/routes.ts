@@ -211,10 +211,10 @@ function recordSessionModeRejected(mode: ResolvedSessionOptions["mode"] | "stick
   stickyPoolCounters.modeRejected[mode]++;
 }
 
-async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug) return acquirePreInit(model);
+async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd });
   return subprocess;
 }
 
@@ -679,6 +679,7 @@ async function handleStreamJsonRequest(
       effort: cliInput.effort,
       thinking: cliInput.thinking,
       debug: cliInput.debug,
+      maxBudgetUsd: cliInput.maxBudgetUsd,
       sessionPolicy: sessionOptions.sticky.policy,
     });
     subprocess = sticky.subprocess;
@@ -696,19 +697,19 @@ async function handleStreamJsonRequest(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd);
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
   } else {
-    const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug });
+    const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd });
     subprocess = acquired.subprocess;
     tb.setSessionWarmHit(acquired.isWarm);
     const lastMessage = body.messages[body.messages.length - 1];
     userText = acquired.isWarm
       ? (bridgeTools ? messagesToPrompt([lastMessage], body) : acquired.lastUserText)
       : cliInput.prompt;
-    releaseSuccess = (assistantText) => returnSession(subprocess, model, body.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug });
+    releaseSuccess = (assistantText) => returnSession(subprocess, model, body.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd });
     releaseDiscard = () => discardSession(subprocess);
   }
 
@@ -1190,6 +1191,7 @@ async function handleResponsesStreamJson(
       effort: cliInput.effort,
       thinking: cliInput.thinking,
       debug: cliInput.debug,
+      maxBudgetUsd: cliInput.maxBudgetUsd,
       sessionPolicy: sessionOptions.sticky.policy,
     });
     subprocess = sticky.subprocess;
@@ -1207,19 +1209,19 @@ async function handleResponsesStreamJson(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd);
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
   } else {
-    const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug });
+    const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd });
     subprocess = acquired.subprocess;
     tb.setSessionWarmHit(acquired.isWarm);
     const lastMessage = chatReq.messages[chatReq.messages.length - 1];
     userText = acquired.isWarm
       ? (bridgeTools ? messagesToPrompt([lastMessage], chatReq) : acquired.lastUserText)
       : cliInput.prompt;
-    releaseSuccess = (assistantText) => returnSession(subprocess, model, chatReq.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug });
+    releaseSuccess = (assistantText) => returnSession(subprocess, model, chatReq.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd });
     releaseDiscard = () => discardSession(subprocess);
   }
 

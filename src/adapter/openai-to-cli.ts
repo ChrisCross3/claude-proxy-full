@@ -37,6 +37,8 @@ export interface CliInput {
   thinking?: boolean;
   /** Verbose logging category filter; mapped to claude --debug. */
   debug?: string;
+  /** Hard USD cap per request (print-mode only per Anthropic). */
+  maxBudgetUsd?: number;
 }
 
 /**
@@ -127,6 +129,17 @@ export function extractDebug(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Extract a positive max-budget-usd value. Returns undefined for unset,
+ * non-number, NaN, infinity, or values <= 0. Caller can pass it through
+ * to claude --max-budget-usd which enforces the cap server-side.
+ */
+export function extractMaxBudgetUsd(raw: unknown): number | undefined {
+  if (typeof raw !== 'number') return undefined;
+  if (!Number.isFinite(raw)) return undefined;
+  return raw > 0 ? raw : undefined;
 }
 
 /**
@@ -227,6 +240,7 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     validateThinkingForModel(def, thinking);
   }
   const debug = extractDebug(request.debug);
+  const maxBudgetUsd = extractMaxBudgetUsd(request.max_budget_usd);
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -235,5 +249,6 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(effort ? { effort } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
     ...(debug ? { debug } : {}),
+    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
   };
 }
