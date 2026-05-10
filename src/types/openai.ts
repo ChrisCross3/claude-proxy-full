@@ -70,6 +70,12 @@ export interface OpenAIChatRequest {
    * Examples: "api", "api,hooks", "!statsig". Empty string or unset means no --debug.
    */
   debug?: string;
+  /**
+   * Hard cap on total API spend for this request in USD. Mapped to
+   * claude --max-budget-usd. Print-mode only per Anthropic docs;
+   * silently no-op in stream-json runs (CLI rejects the flag).
+   */
+  max_budget_usd?: number;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -240,6 +246,11 @@ export interface ResponsesRequest {
    * Verbose logging for this spawn, mapped to claude --debug <filter>.
    */
   debug?: string;
+  /**
+   * Hard cap on total API spend for this request in USD. Mapped to
+   * claude --max-budget-usd. Print-mode only per Anthropic docs.
+   */
+  max_budget_usd?: number;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 

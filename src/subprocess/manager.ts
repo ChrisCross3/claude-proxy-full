@@ -39,6 +39,8 @@ export interface SubprocessOptions {
   thinking?: boolean;
   /** Verbose-logging category filter for this spawn, mapped to claude --debug. */
   debug?: string;
+  /** Hard USD cap; print-mode only. */
+  maxBudgetUsd?: number;
 }
 
 export interface SubprocessEvents {
@@ -245,6 +247,14 @@ export class ClaudeSubprocess extends EventEmitter {
       const supported = await supportsClaudeFlag("--debug");
       if (supported) {
         args.push("--debug", options.debug);
+      }
+    }
+
+    // Optional per-request USD spending cap (print-mode only per Anthropic).
+    if (options.maxBudgetUsd !== undefined) {
+      const supported = await supportsClaudeFlag("--max-budget-usd");
+      if (supported) {
+        args.push("--max-budget-usd", String(options.maxBudgetUsd));
       }
     }
 

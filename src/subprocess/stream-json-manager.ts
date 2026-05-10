@@ -112,6 +112,8 @@ export interface StreamJsonOptions {
   thinking?: boolean;
   /** Verbose-logging category filter for this spawn, mapped to claude --debug. */
   debug?: string;
+  /** Hard USD cap; print-mode only. */
+  maxBudgetUsd?: number;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -172,6 +174,12 @@ export class StreamJsonSubprocess extends EventEmitter {
     // Optional verbose logging filter — passthrough of claude --debug.
     if (options.debug) {
       await pushClaudeFlagIfSupported(args, "--debug", { value: options.debug });
+    }
+
+    // Optional per-request USD spending cap (print-mode only upstream — we
+    // still call pushClaudeFlagIfSupported so the cache stays accurate).
+    if (options.maxBudgetUsd !== undefined) {
+      await pushClaudeFlagIfSupported(args, "--max-budget-usd", { value: String(options.maxBudgetUsd) });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");

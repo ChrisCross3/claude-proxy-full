@@ -75,6 +75,8 @@ interface AcquireOptions {
   thinking?: boolean;
   /** Verbose-logging category filter; not part of the fingerprint (diagnostic only). */
   debug?: string;
+  /** Hard USD cap; not part of the fingerprint (per-call enforcement, no init-state). */
+  maxBudgetUsd?: number;
 }
 
 function disallowedToolsKey(disallowedTools: string[] = []): string {
@@ -183,9 +185,10 @@ async function cold(
   const needsDedicated = (options.disallowedTools && options.disallowedTools.length > 0)
     || !!options.effort
     || options.thinking !== undefined
-    || !!options.debug;
+    || !!options.debug
+    || options.maxBudgetUsd !== undefined;
   const sub = needsDedicated
-    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug)
+    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking, options.debug, options.maxBudgetUsd)
     : await acquirePreInit(model);
 
   return {
@@ -197,9 +200,9 @@ async function cold(
   };
 }
 
-async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string): Promise<StreamJsonSubprocess> {
+async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number): Promise<StreamJsonSubprocess> {
   const sub = new StreamJsonSubprocess();
-  await sub.start({ model, disallowedTools, effort, thinking, debug });
+  await sub.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd });
   return sub;
 }
 
