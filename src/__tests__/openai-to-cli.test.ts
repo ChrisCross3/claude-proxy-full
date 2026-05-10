@@ -7,6 +7,8 @@ import {
   extractDebug,
   extractMaxBudgetUsd,
   extractPermissionMode,
+  extractSystemPrompt,
+  extractAppendSystemPrompt,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
@@ -401,4 +403,47 @@ test("openaiToCli throws on unknown permission_mode (HTTP 400 path)", () => {
     permission_mode: "yolo",
   };
   assert.throws(() => openaiToCli(req as any), /Unknown permission_mode/);
+});
+
+
+// --- extractSystemPrompt / extractAppendSystemPrompt ---
+
+test("extractSystemPrompt accepts non-empty trimmed string", () => {
+  assert.equal(extractSystemPrompt("You are a teapot"), "You are a teapot");
+  assert.equal(extractSystemPrompt("  trimmed  "), "trimmed");
+});
+
+test("extractSystemPrompt returns undefined for unset / empty / non-string", () => {
+  assert.equal(extractSystemPrompt(undefined), undefined);
+  assert.equal(extractSystemPrompt(null), undefined);
+  assert.equal(extractSystemPrompt(""), undefined);
+  assert.equal(extractSystemPrompt("   "), undefined);
+  assert.equal(extractSystemPrompt(42), undefined);
+});
+
+test("extractAppendSystemPrompt has the same shape as extractSystemPrompt", () => {
+  assert.equal(extractAppendSystemPrompt("Always use TypeScript"), "Always use TypeScript");
+  assert.equal(extractAppendSystemPrompt(""), undefined);
+});
+
+test("openaiToCli forwards both system-prompt fields independently", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    system_prompt: "Replace me",
+    append_system_prompt: "Plus this",
+  };
+  const cli = openaiToCli(req as any);
+  assert.equal(cli.systemPrompt, "Replace me");
+  assert.equal(cli.appendSystemPrompt, "Plus this");
+});
+
+test("openaiToCli omits system-prompt fields when unset", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+  };
+  const cli = openaiToCli(req as any);
+  assert.equal(cli.systemPrompt, undefined);
+  assert.equal(cli.appendSystemPrompt, undefined);
 });

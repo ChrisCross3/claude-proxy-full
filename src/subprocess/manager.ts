@@ -44,6 +44,10 @@ export interface SubprocessOptions {
   maxBudgetUsd?: number;
   /** Permission mode for tool calls. Whitelist-validated at adapter layer. */
   permissionMode?: ClaudePermissionMode;
+  /** Replacement system prompt; mapped to claude --system-prompt. */
+  systemPrompt?: string;
+  /** Appended system prompt; mapped to claude --append-system-prompt. */
+  appendSystemPrompt?: string;
 }
 
 export interface SubprocessEvents {
@@ -266,6 +270,20 @@ export class ClaudeSubprocess extends EventEmitter {
       const supported = await supportsClaudeFlag("--permission-mode");
       if (supported) {
         args.push("--permission-mode", options.permissionMode);
+      }
+    }
+
+    // System prompt replacement / append (both can coexist; append wins last).
+    if (options.systemPrompt) {
+      const supported = await supportsClaudeFlag("--system-prompt");
+      if (supported) {
+        args.push("--system-prompt", options.systemPrompt);
+      }
+    }
+    if (options.appendSystemPrompt) {
+      const supported = await supportsClaudeFlag("--append-system-prompt");
+      if (supported) {
+        args.push("--append-system-prompt", options.appendSystemPrompt);
       }
     }
 

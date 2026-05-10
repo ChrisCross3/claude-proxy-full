@@ -117,6 +117,10 @@ export interface StreamJsonOptions {
   maxBudgetUsd?: number;
   /** Permission mode for tool calls. Whitelist-validated at adapter layer. */
   permissionMode?: ClaudePermissionMode;
+  /** Replacement system prompt; mapped to claude --system-prompt. */
+  systemPrompt?: string;
+  /** Appended system prompt; mapped to claude --append-system-prompt. */
+  appendSystemPrompt?: string;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -189,6 +193,16 @@ export class StreamJsonSubprocess extends EventEmitter {
     // validated at the adapter; the spawner only checks CLI capability.
     if (options.permissionMode) {
       await pushClaudeFlagIfSupported(args, "--permission-mode", { value: options.permissionMode });
+    }
+
+    // System prompt replacement / append. Both flags coexist (append takes
+    // effect on top of the replacement); --system-prompt-file is intentionally
+    // not exposed here — we accept the prompt as inline text.
+    if (options.systemPrompt) {
+      await pushClaudeFlagIfSupported(args, "--system-prompt", { value: options.systemPrompt });
+    }
+    if (options.appendSystemPrompt) {
+      await pushClaudeFlagIfSupported(args, "--append-system-prompt", { value: options.appendSystemPrompt });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");
