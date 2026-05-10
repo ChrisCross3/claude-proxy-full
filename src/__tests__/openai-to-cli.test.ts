@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   extractModel,
   extractEffort,
+  extractThinking,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
   validateEffortForModel,
+  validateThinkingForModel,
 } from "../adapter/openai-to-cli.js";
 import type { OpenAIChatRequest } from "../types/openai.js";
 
@@ -201,4 +203,83 @@ test("openaiToCli throws when reasoning_effort is set on a model without effort 
     reasoning_effort: "high",
   };
   assert.throws(() => openaiToCli(req), /does not support the --effort flag at all/);
+});
+
+
+// --- extractThinking: boolean OR Anthropic-native object ---
+
+test("extractThinking accepts boolean true/false", () => {
+  assert.equal(extractThinking(true), true);
+  assert.equal(extractThinking(false), false);
+});
+
+test("extractThinking accepts Anthropic-native object form", () => {
+  assert.equal(extractThinking({ type: "enabled" }), true);
+  assert.equal(extractThinking({ type: "disabled" }), false);
+  assert.equal(extractThinking({ type: "enabled", budget_tokens: 4096 }), true);
+});
+
+test("extractThinking returns undefined for unset/garbage", () => {
+  assert.equal(extractThinking(undefined), undefined);
+  assert.equal(extractThinking(null), undefined);
+  assert.equal(extractThinking("on"), undefined);
+  assert.equal(extractThinking({ type: "bogus" }), undefined);
+  assert.equal(extractThinking({}), undefined);
+});
+
+// --- validateThinkingForModel: strict per-model check ---
+
+test("validateThinkingForModel accepts when model supports thinking", () => {
+  const opus = resolveModelStrict("claude-opus-4-7");
+  assert.doesNotThrow(() => validateThinkingForModel(opus, true));
+  assert.doesNotThrow(() => validateThinkingForModel(opus, false));
+  const sonnet = resolveModelStrict("claude-sonnet-4-6");
+  assert.doesNotThrow(() => validateThinkingForModel(sonnet, true));
+});
+
+test("validateThinkingForModel rejects thinking=true on Haiku — strict, no silent downgrade", () => {
+  const haiku = resolveModelStrict("claude-haiku-4-5-20251001");
+  assert.throws(() => validateThinkingForModel(haiku, true), /does not support extended thinking/);
+});
+
+test("validateThinkingForModel accepts thinking=false on Haiku (explicit off is fine)", () => {
+  const haiku = resolveModelStrict("claude-haiku-4-5-20251001");
+  assert.doesNotThrow(() => validateThinkingForModel(haiku, false));
+});
+
+// --- openaiToCli end-to-end with thinking ---
+
+test("openaiToCli passes thinking through when supported by the model", () => {
+  const req = {
+    model: "claude-opus-4-7",
+    messages: [{ role: "user" as const, content: "hi" }],
+    thinking: true,
+  };
+  assert.equal(openaiToCli(req as any).thinking, true);
+});
+
+test("openaiToCli accepts Anthropic-native thinking object", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "hi" }],
+    thinking: { type: "enabled" as const },
+  };
+  assert.equal(openaiToCli(req as any).thinking, true);
+});
+
+test("openaiToCli throws when thinking is requested on a model that doesn't support it", () => {
+  const req = {
+    model: "claude-haiku-4-5-20251001",
+    messages: [{ role: "user" as const, content: "hi" }],
+    thinking: true,
+  };
+  assert.throws(() => openaiToCli(req as any), /does not support extended thinking/);
+});
+
+test("openaiToCli omits thinking when the request doesn't set it", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "hi" }],
+  };
+  assert.equal(openaiToCli(req as any).thinking, undefined);
 });

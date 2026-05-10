@@ -21,6 +21,8 @@ export interface CliInput {
   disallowedTools?: string[];
   /** Effort level. Validated against the model's effortLevels before use. */
   effort?: ClaudeEffort;
+  /** Thinking toggle. Validated against the model's thinkingSupported flag. */
+  thinking?: boolean;
 }
 
 /**
@@ -79,6 +81,37 @@ export function validateEffortForModel(def: ClaudeModelDefinition, effort: Claud
     throw new Error(
       `Model '${def.id}' does not support effort='${effort}'. ` +
       `Allowed levels for this model: ${def.effortLevels.join(', ')}.`,
+    );
+  }
+}
+
+/**
+ * Normalize a thinking hint (boolean or Anthropic-native object) to a strict
+ * boolean. Returns undefined if the input is unset or unparseable so callers
+ * can leave the setting at its default.
+ */
+export function extractThinking(raw: unknown): boolean | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'object' && raw !== null && 'type' in raw) {
+    const t = (raw as { type?: unknown }).type;
+    if (t === 'enabled') return true;
+    if (t === 'disabled') return false;
+  }
+  return undefined;
+}
+
+/**
+ * Strict semantic check: does this model support extended thinking at all?
+ * Throws when thinking is requested for a model whose registry entry says no
+ * (Haiku 4.5, for example). Refuses silent downgrade.
+ */
+export function validateThinkingForModel(def: ClaudeModelDefinition, thinking: boolean): void {
+  if (thinking && !def.thinkingSupported) {
+    throw new Error(
+      `Model '${def.id}' does not support extended thinking. ` +
+      `Remove thinking from the request or switch to a model that supports it ` +
+      `(see src/models/registry.ts).`,
     );
   }
 }
@@ -160,11 +193,16 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   if (effort) {
     validateEffortForModel(def, effort);
   }
+  const thinking = extractThinking(request.thinking);
+  if (thinking !== undefined) {
+    validateThinkingForModel(def, thinking);
+  }
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
     sessionId: request.user,
     ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
     ...(effort ? { effort } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
   };
 }

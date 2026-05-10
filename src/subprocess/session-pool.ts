@@ -63,12 +63,16 @@ interface SlotFingerprint {
   disallowedToolsKey: string;
   /** Effort level as a fingerprint key; empty string when no effort was requested. */
   effortKey: string;
+  /** Thinking toggle as a fingerprint key; empty string when no thinking override was set. */
+  thinkingKey: string;
 }
 
 interface AcquireOptions {
   disallowedTools?: string[];
   /** Per-request effort. Becomes part of the pool fingerprint so warm hits never silently downgrade. */
   effort?: ClaudeEffort;
+  /** Per-request thinking toggle. Becomes part of the pool fingerprint. */
+  thinking?: boolean;
 }
 
 function disallowedToolsKey(disallowedTools: string[] = []): string {
@@ -77,6 +81,11 @@ function disallowedToolsKey(disallowedTools: string[] = []): string {
 
 function effortKey(effort?: ClaudeEffort): string {
   return effort ?? "";
+}
+
+function thinkingKey(thinking?: boolean): string {
+  if (thinking === undefined) return "";
+  return thinking ? "on" : "off";
 }
 
 // Bounded counters for /metrics. Module-scoped; the metrics endpoint reads
@@ -120,8 +129,9 @@ export async function acquireSession(
   const lastUserText = extractText(lastMsg.content);
   const disallowedKey = disallowedToolsKey(options.disallowedTools);
   const effortStr = effortKey(options.effort);
-  const priorKey = hashConversation(model, messages.slice(0, -1), disallowedKey, effortStr);
-  const postTurnKey = hashConversation(model, messages, disallowedKey, effortStr); // before assistant response — see note below
+  const thinkingStr = thinkingKey(options.thinking);
+  const priorKey = hashConversation(model, messages.slice(0, -1), disallowedKey, effortStr, thinkingStr);
+  const postTurnKey = hashConversation(model, messages, disallowedKey, effortStr, thinkingStr); // before assistant response — see note below
 
   const slot = slots.get(priorKey);
   if (slot) {
@@ -129,6 +139,7 @@ export async function acquireSession(
     const fingerprintOk = slot.fingerprint.model === model
       && slot.fingerprint.disallowedToolsKey === disallowedKey
       && slot.fingerprint.effortKey === effortStr
+      && slot.fingerprint.thinkingKey === thinkingStr
       && slot.subprocess.getModel() === model;
     if (slot.subprocess.isHealthy() && fingerprintOk) {
       console.error(`[SessionPool] WARM HIT model=${model} key=${priorKey.slice(0, 8)}`);
@@ -167,9 +178,11 @@ async function cold(
   // policy and no per-request effort override is set. Both disallowedTools and
   // effort must be baked into the spawn args, so those requests get a dedicated
   // process rather than a pre-initialized generic one.
-  const needsDedicated = (options.disallowedTools && options.disallowedTools.length > 0) || !!options.effort;
+  const needsDedicated = (options.disallowedTools && options.disallowedTools.length > 0)
+    || !!options.effort
+    || options.thinking !== undefined;
   const sub = needsDedicated
-    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort)
+    ? await createDedicatedProcess(model, options.disallowedTools ?? [], options.effort, options.thinking)
     : await acquirePreInit(model);
 
   return {
@@ -177,13 +190,13 @@ async function cold(
     isWarm: false,
     flattenedPrompt: messagesToFlatPrompt(messages),
     lastUserText: extractText(messages[messages.length - 1].content),
-    postTurnKey: postTurnKey ?? hashConversation(model, messages, disallowedToolsKey(options.disallowedTools), effortKey(options.effort)),
+    postTurnKey: postTurnKey ?? hashConversation(model, messages, disallowedToolsKey(options.disallowedTools), effortKey(options.effort), thinkingKey(options.thinking)),
   };
 }
 
-async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort): Promise<StreamJsonSubprocess> {
+async function createDedicatedProcess(model: ClaudeModel, disallowedTools: string[], effort?: ClaudeEffort, thinking?: boolean): Promise<StreamJsonSubprocess> {
   const sub = new StreamJsonSubprocess();
-  await sub.start({ model, disallowedTools, effort });
+  await sub.start({ model, disallowedTools, effort, thinking });
   return sub;
 }
 
@@ -213,12 +226,13 @@ export function returnSession(
   ];
   const disallowedKey = disallowedToolsKey(options.disallowedTools);
   const effortStr = effortKey(options.effort);
-  const postKey = hashConversation(model, fullMessages, disallowedKey, effortStr);
+  const thinkingStr = thinkingKey(options.thinking);
+  const postKey = hashConversation(model, fullMessages, disallowedKey, effortStr, thinkingStr);
   slots.set(postKey, {
     subprocess,
     key: postKey,
     lastUsedAt: Date.now(),
-    fingerprint: { model, disallowedToolsKey: disallowedKey, effortKey: effortStr },
+    fingerprint: { model, disallowedToolsKey: disallowedKey, effortKey: effortStr, thinkingKey: thinkingStr },
   });
   console.error(`[SessionPool] Returned subprocess under key ${postKey.slice(0, 8)} (size=${slots.size}/${MAX_SESSIONS})`);
 }
@@ -260,7 +274,7 @@ function evictLRU(): void {
   }
 }
 
-function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], disallowedKey: string = "", effortLevel: string = ""): string {
+function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], disallowedKey: string = "", effortLevel: string = "", thinkingLevel: string = ""): string {
   // Ignore assistant content: the live subprocess already remembers what *it*
   // said. The incoming OpenAI history may differ in whitespace/punctuation
   // (e.g. trailing period stripped by clients) and we don't want that to bust
@@ -271,6 +285,8 @@ function hashConversation(model: ClaudeModel, messages: OpenAIChatMessage[], dis
   h.update(disallowedKey);
   h.update("\0effort\0");
   h.update(effortLevel);
+  h.update("\0thinking\0");
+  h.update(thinkingLevel);
   for (const m of messages) {
     h.update("\0");
     h.update(m.role);

@@ -5,6 +5,7 @@
 import type { ClaudeCliAssistant, ClaudeCliResult } from "../types/claude-cli.js";
 import type { OpenAIChatRequest, OpenAIChatResponse, OpenAIChatChunk, OpenAIUsage, OpenAIToolCall } from "../types/openai.js";
 import { parseToolCalls, shouldBridgeExternalTools } from "./tools.js";
+import { resolveModel } from "../models/registry.js";
 
 /**
  * Extract text content from Claude CLI assistant message
@@ -193,10 +194,16 @@ function ensureString(value: unknown): string {
   return String(value);
 }
 
-function normalizeModelName(model: string | undefined): string {
-  if (!model) return "claude-sonnet-4";
-  if (model.includes("opus")) return "claude-opus-4";
-  if (model.includes("sonnet")) return "claude-sonnet-4";
-  if (model.includes("haiku")) return "claude-haiku-4";
-  return model;
+/**
+ * Convert a Claude-CLI-emitted model name to the canonical Registry ID.
+ * If the input maps to a known model (including via alias or [1m] suffix),
+ * we return that model's canonical id so the OpenAI response field reflects
+ * what was actually run. Unknown strings are echoed unchanged so the response
+ * still surfaces upstream telemetry instead of being silently rewritten to
+ * a Registry default.
+ */
+export function normalizeModelName(model: string | undefined): string {
+  if (!model) return "unknown";
+  const def = resolveModel(model);
+  return def ? def.id : model;
 }
