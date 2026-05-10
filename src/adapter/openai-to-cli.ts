@@ -1,79 +1,89 @@
 /**
- * Converts OpenAI chat request format to Claude CLI input
+ * Converts an OpenAI-wire chat request into Claude CLI input.
+ *
+ * Model resolution and capability validation are strict: unknown models
+ * and unsupported effort levels throw instead of silently falling back.
+ * The source of truth for model capabilities is src/models/registry.ts.
  */
 
 import type { OpenAIChatRequest, OpenAIMessageContent } from "../types/openai.js";
 import { toolDefsToPrompt, toolResultToPrompt, assistantToolCallsToPrompt, shouldBridgeExternalTools, externalNativeToolDisallowList } from "./tools.js";
+import { resolveModel, ALL_EFFORT_LEVELS, type ClaudeEffort, type ClaudeModelDefinition } from "../models/registry.js";
 
-export type ClaudeModel = "opus" | "sonnet" | "haiku" | string;
+/** Kept for downstream files; canonical IDs come from the registry now. */
+export type ClaudeModel = string;
 
 export interface CliInput {
   prompt: string;
-  model: ClaudeModel;
+  /** Canonical Claude model ID, resolved through the registry. */
+  model: string;
   sessionId?: string;
   disallowedTools?: string[];
-}
-
-const MODEL_MAP: Record<string, ClaudeModel> = {
-  // Direct model names
-  "claude-opus-4": "opus",
-  "claude-sonnet-4": "sonnet",
-  "claude-haiku-4": "haiku",
-  // 4.5/4.6/4.7 generation (exact ids passed straight through to claude CLI's --model)
-  "claude-opus-4-7": "claude-opus-4-7",
-  "claude-opus-4-6": "claude-opus-4-6",
-  "claude-sonnet-4-6": "claude-sonnet-4-6",
-  "claude-sonnet-4-5": "claude-sonnet-4-5",
-  "claude-haiku-4-5": "claude-haiku-4-5",
-  "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
-  // With provider prefix (claude-code-cli/)
-  "claude-code-cli/claude-opus-4": "opus",
-  "claude-code-cli/claude-sonnet-4": "sonnet",
-  "claude-code-cli/claude-haiku-4": "haiku",
-  "claude-code-cli/claude-opus-4-7": "claude-opus-4-7",
-  "claude-code-cli/claude-opus-4-6": "claude-opus-4-6",
-  "claude-code-cli/claude-sonnet-4-6": "claude-sonnet-4-6",
-  "claude-code-cli/claude-sonnet-4-5": "claude-sonnet-4-5",
-  "claude-code-cli/claude-haiku-4-5": "claude-haiku-4-5",
-  "claude-code-cli/claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
-  // With provider prefix (claude-proxy/)
-  "claude-proxy/claude-opus-4": "opus",
-  "claude-proxy/claude-sonnet-4": "sonnet",
-  "claude-proxy/claude-haiku-4": "haiku",
-  "claude-proxy/claude-opus-4-7": "claude-opus-4-7",
-  "claude-proxy/claude-opus-4-6": "claude-opus-4-6",
-  "claude-proxy/claude-sonnet-4-6": "claude-sonnet-4-6",
-  "claude-proxy/claude-sonnet-4-5": "claude-sonnet-4-5",
-  "claude-proxy/claude-haiku-4-5": "claude-haiku-4-5",
-  "claude-proxy/claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
-  // Short aliases
-  "opus": "opus",
-  "sonnet": "sonnet",
-  "haiku": "haiku",
-};
-
-/**
- * Extract Claude model alias from request model string
- */
-export function extractModel(model: string): ClaudeModel {
-  // Try direct lookup
-  if (MODEL_MAP[model]) {
-    return MODEL_MAP[model];
-  }
-
-  // Try stripping provider prefix
-  const stripped = model.replace(/^claude-code-cli\//, "");
-  if (MODEL_MAP[stripped]) {
-    return MODEL_MAP[stripped];
-  }
-
-  // Default to opus (Claude Max subscription)
-  return "opus";
+  /** Effort level. Validated against the model's effortLevels before use. */
+  effort?: ClaudeEffort;
 }
 
 /**
- * Extract text from OpenAI message content (handles string, array, and null)
+ * Resolve any accepted model identifier (canonical ID, alias, [1m] variant)
+ * to its canonical ID. Throws if the model is not declared in the registry.
  */
+export function extractModel(model: string): string {
+  const def = resolveModel(model);
+  if (!def) {
+    throw new Error(
+      `Unknown Claude model id or alias: '${model}'. ` +
+      `Add it to src/models/registry.ts if Anthropic has released it.`,
+    );
+  }
+  return def.id;
+}
+
+/** Like extractModel, but returns the full definition for callers that need it. */
+export function resolveModelStrict(model: string): ClaudeModelDefinition {
+  const def = resolveModel(model);
+  if (!def) {
+    throw new Error(
+      `Unknown Claude model id or alias: '${model}'. ` +
+      `Add it to src/models/registry.ts if Anthropic has released it.`,
+    );
+  }
+  return def;
+}
+
+/**
+ * Syntactic validation of a reasoning_effort hint. Returns undefined for unset
+ * or out-of-whitelist values so callers can treat "not requested" and
+ * "requested but invalid syntax" the same way (no per-request override).
+ */
+export function extractEffort(raw: unknown): ClaudeEffort | undefined {
+  if (typeof raw !== 'string') return undefined;
+  return (ALL_EFFORT_LEVELS as ReadonlyArray<string>).includes(raw)
+    ? (raw as ClaudeEffort)
+    : undefined;
+}
+
+/**
+ * Strict semantic check: does this model support this effort level? Throws on
+ * mismatch. We deliberately bypass Claude's silent-fallback rule so requests
+ * never produce an unintended lower effort.
+ */
+export function validateEffortForModel(def: ClaudeModelDefinition, effort: ClaudeEffort): void {
+  if (def.effortLevels.length === 0) {
+    throw new Error(
+      `Model '${def.id}' does not support the --effort flag at all. ` +
+      `Omit reasoning_effort or switch to a model that supports it ` +
+      `(see src/models/registry.ts).`,
+    );
+  }
+  if (!def.effortLevels.includes(effort)) {
+    throw new Error(
+      `Model '${def.id}' does not support effort='${effort}'. ` +
+      `Allowed levels for this model: ${def.effortLevels.join(', ')}.`,
+    );
+  }
+}
+
+/** Extract plain text from an OpenAI message-content union (string, array, or null). */
 function extractContentText(content: OpenAIMessageContent): string {
   if (typeof content === "string") return content;
   if (content === null || content === undefined) return "";
@@ -89,13 +99,9 @@ function extractContentText(content: OpenAIMessageContent): string {
 }
 
 /**
- * Convert OpenAI messages array to a single prompt string for Claude CLI
- *
- * Claude Code CLI in --print mode expects a single prompt, not a conversation.
- * We format the messages into a readable format that preserves context.
- *
- * When external tools are provided, injects tool definitions into the prompt
- * and converts tool-result messages into Claude-readable context.
+ * Flatten an OpenAI messages array into a single Claude prompt string.
+ * Claude --print expects one prompt, not a conversation; we annotate roles
+ * with lightweight wrappers so role boundaries survive.
  */
 export function messagesToPrompt(
   messages: OpenAIChatRequest["messages"],
@@ -103,7 +109,6 @@ export function messagesToPrompt(
 ): string {
   const parts: string[] = [];
 
-  // Inject external caller-dispatched tool definitions as a system block.
   if (req && shouldBridgeExternalTools(req)) {
     parts.push(`<system>\n${toolDefsToPrompt(req)}\n</system>\n`);
   }
@@ -126,8 +131,6 @@ export function messagesToPrompt(
       }
 
       case "assistant": {
-        // If assistant previously made tool_calls, reproduce them as JSON
-        // so Claude sees what it requested.
         const tcBlock = assistantToolCallsToPrompt(msg);
         const text = extractContentText(msg.content);
         const combined = [text, tcBlock].filter(Boolean).join("\n");
@@ -137,7 +140,6 @@ export function messagesToPrompt(
       }
 
       case "tool": {
-        // Tool result from the external caller
         parts.push(toolResultToPrompt(msg));
         break;
       }
@@ -148,14 +150,21 @@ export function messagesToPrompt(
 }
 
 /**
- * Convert OpenAI chat request to CLI input format
+ * Convert an OpenAI-wire chat request into Claude CLI input. Performs strict
+ * model and effort validation; throws on unknown model or unsupported effort.
  */
 export function openaiToCli(request: OpenAIChatRequest): CliInput {
+  const def = resolveModelStrict(request.model);
   const disallowedTools = externalNativeToolDisallowList(request);
+  const effort = extractEffort(request.reasoning_effort);
+  if (effort) {
+    validateEffortForModel(def, effort);
+  }
   return {
     prompt: messagesToPrompt(request.messages, request),
-    model: extractModel(request.model),
-    sessionId: request.user, // Use OpenAI's user field for session mapping
+    model: def.id,
+    sessionId: request.user,
     ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
+    ...(effort ? { effort } : {}),
   };
 }

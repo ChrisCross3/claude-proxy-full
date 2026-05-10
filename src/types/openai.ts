@@ -57,6 +57,8 @@ export interface OpenAIChatRequest {
   stream_options?: {
     include_usage?: boolean;
   };
+  /** Effort hint. Wire-key matches OpenAI convention; semantics map 1:1 to claude --effort. */
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -216,6 +218,8 @@ export interface ResponsesRequest {
   instructions?: string;
   tools?: OpenAITool[];
   tool_choice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
+  /** Effort hint. Wire-key matches OpenAI convention; semantics map 1:1 to claude --effort. */
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
