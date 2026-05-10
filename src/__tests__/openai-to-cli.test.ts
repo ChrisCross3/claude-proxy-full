@@ -4,6 +4,7 @@ import {
   extractModel,
   extractEffort,
   extractThinking,
+  extractDebug,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
@@ -282,4 +283,39 @@ test("openaiToCli omits thinking when the request doesn't set it", () => {
     messages: [{ role: "user" as const, content: "hi" }],
   };
   assert.equal(openaiToCli(req as any).thinking, undefined);
+});
+
+
+// --- extractDebug: optional category filter string ---
+
+test("extractDebug returns trimmed string when non-empty", () => {
+  assert.equal(extractDebug("api"), "api");
+  assert.equal(extractDebug("api,hooks"), "api,hooks");
+  assert.equal(extractDebug("  spaced  "), "spaced");
+});
+
+test("extractDebug returns undefined for unset, empty, or non-string", () => {
+  assert.equal(extractDebug(undefined), undefined);
+  assert.equal(extractDebug(null), undefined);
+  assert.equal(extractDebug(""), undefined);
+  assert.equal(extractDebug("   "), undefined);
+  assert.equal(extractDebug(true), undefined);
+  assert.equal(extractDebug(123), undefined);
+});
+
+test("openaiToCli passes debug through when set", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    debug: "api",
+  };
+  assert.equal(openaiToCli(req as any).debug, "api");
+});
+
+test("openaiToCli omits debug when unset", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+  };
+  assert.equal(openaiToCli(req as any).debug, undefined);
 });

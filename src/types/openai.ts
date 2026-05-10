@@ -65,6 +65,11 @@ export interface OpenAIChatRequest {
    * budget_tokens on the object form is currently ignored (CLI accepts only on/off).
    */
   thinking?: boolean | { type: 'enabled' | 'disabled'; budget_tokens?: number };
+  /**
+   * Verbose logging for this spawn, mapped to claude --debug <filter>.
+   * Examples: "api", "api,hooks", "!statsig". Empty string or unset means no --debug.
+   */
+  debug?: string;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -231,6 +236,10 @@ export interface ResponsesRequest {
    * Maps to claude's alwaysThinkingEnabled setting via --settings inline JSON.
    */
   thinking?: boolean | { type: 'enabled' | 'disabled'; budget_tokens?: number };
+  /**
+   * Verbose logging for this spawn, mapped to claude --debug <filter>.
+   */
+  debug?: string;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 

@@ -66,6 +66,8 @@ export interface StickyAcquireOptions {
   effort?: ClaudeEffort;
   /** Per-request thinking toggle. Part of the session fingerprint. */
   thinking?: boolean;
+  /** Verbose-logging category filter; not part of the fingerprint (diagnostic only). */
+  debug?: string;
   mcpPolicyKey?: string;
   cwd?: string;
   dynamicPromptExclusion?: boolean;
@@ -189,7 +191,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -258,10 +260,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug });
   return subprocess;
 }
 

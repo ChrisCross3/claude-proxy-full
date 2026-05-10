@@ -37,6 +37,8 @@ export interface SubprocessOptions {
    * Injected via --settings inline JSON as alwaysThinkingEnabled.
    */
   thinking?: boolean;
+  /** Verbose-logging category filter for this spawn, mapped to claude --debug. */
+  debug?: string;
 }
 
 export interface SubprocessEvents {
@@ -236,6 +238,14 @@ export class ClaudeSubprocess extends EventEmitter {
         );
       }
       args.push("--settings", JSON.stringify({ alwaysThinkingEnabled: options.thinking }));
+    }
+
+    // Optional verbose logging filter — passthrough of claude --debug.
+    if (options.debug) {
+      const supported = await supportsClaudeFlag("--debug");
+      if (supported) {
+        args.push("--debug", options.debug);
+      }
     }
 
     return args;
