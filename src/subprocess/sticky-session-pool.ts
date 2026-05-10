@@ -25,6 +25,8 @@ export interface StickySessionFingerprint {
   disallowedToolsKey: string;
   /** Effort level as a fingerprint key; empty string when no effort was requested. */
   effortKey: string;
+  /** Thinking toggle as a fingerprint key; empty string when no thinking override was set. */
+  thinkingKey: string;
   mcpPolicyKey: string;
   cwd: string;
   dynamicPromptExclusion: boolean;
@@ -62,6 +64,8 @@ export interface StickyAcquireOptions {
   disallowedTools?: string[];
   /** Per-request effort. Part of the session fingerprint so warm sticky hits never silently downgrade. */
   effort?: ClaudeEffort;
+  /** Per-request thinking toggle. Part of the session fingerprint. */
+  thinking?: boolean;
   mcpPolicyKey?: string;
   cwd?: string;
   dynamicPromptExclusion?: boolean;
@@ -142,6 +146,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     runtime: "stream-json",
     disallowedToolsKey: disallowedToolsKey(options.disallowedTools),
     effortKey: options.effort ?? "",
+    thinkingKey: options.thinking === undefined ? "" : (options.thinking ? "on" : "off"),
     mcpPolicyKey: options.mcpPolicyKey || defaultMcpPolicyKey(),
     cwd: options.cwd || process.cwd(),
     dynamicPromptExclusion: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1" || options.dynamicPromptExclusion === true,
@@ -184,7 +189,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -253,10 +258,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort });
+  await subprocess.start({ model, disallowedTools, effort, thinking });
   return subprocess;
 }
 

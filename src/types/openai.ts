@@ -59,6 +59,12 @@ export interface OpenAIChatRequest {
   };
   /** Effort hint. Wire-key matches OpenAI convention; semantics map 1:1 to claude --effort. */
   reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * Thinking toggle. Accepts a boolean shorthand or the Anthropic-native object form.
+   * Maps to claude's alwaysThinkingEnabled setting via --settings inline JSON.
+   * budget_tokens on the object form is currently ignored (CLI accepts only on/off).
+   */
+  thinking?: boolean | { type: 'enabled' | 'disabled'; budget_tokens?: number };
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -220,6 +226,11 @@ export interface ResponsesRequest {
   tool_choice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
   /** Effort hint. Wire-key matches OpenAI convention; semantics map 1:1 to claude --effort. */
   reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * Thinking toggle. Accepts a boolean shorthand or the Anthropic-native object form.
+   * Maps to claude's alwaysThinkingEnabled setting via --settings inline JSON.
+   */
+  thinking?: boolean | { type: 'enabled' | 'disabled'; budget_tokens?: number };
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 

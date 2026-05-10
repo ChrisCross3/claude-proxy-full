@@ -104,6 +104,12 @@ export interface StreamJsonOptions {
    * registry entry; this layer enforces only the CLI-capability presence.
    */
   effort?: ClaudeEffort;
+  /**
+   * Thinking toggle for the spawned Claude session.
+   * Injected via --settings inline JSON as alwaysThinkingEnabled.
+   * Must already be validated against the model's registry entry.
+   */
+  thinking?: boolean;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -148,6 +154,18 @@ export class StreamJsonSubprocess extends EventEmitter {
         );
       }
       args.push("--effort", options.effort);
+    }
+    // Thinking: --settings inline JSON. claude --help has had --settings for
+    // a long time; we still capability-check before pushing, never silently drop.
+    if (options.thinking !== undefined) {
+      const supported = await supportsClaudeFlag("--settings");
+      if (!supported) {
+        throw new Error(
+          `Claude CLI does not support --settings (capability check via 'claude --help'). ` +
+          `thinking='${options.thinking}' was requested; either run 'claude update' or omit thinking.`,
+        );
+      }
+      args.push("--settings", JSON.stringify({ alwaysThinkingEnabled: options.thinking }));
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");

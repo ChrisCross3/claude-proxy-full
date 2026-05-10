@@ -32,6 +32,11 @@ export interface SubprocessOptions {
    * installed Claude CLI does not advertise --effort.
    */
   effort?: ClaudeEffort;
+  /**
+   * Thinking toggle for the spawned Claude session.
+   * Injected via --settings inline JSON as alwaysThinkingEnabled.
+   */
+  thinking?: boolean;
 }
 
 export interface SubprocessEvents {
@@ -219,6 +224,18 @@ export class ClaudeSubprocess extends EventEmitter {
         );
       }
       args.push("--effort", options.effort);
+    }
+
+    // Thinking: --settings inline JSON injection, capability-checked.
+    if (options.thinking !== undefined) {
+      const supported = await supportsClaudeFlag("--settings");
+      if (!supported) {
+        throw new Error(
+          `Claude CLI does not support --settings (capability check via 'claude --help'). ` +
+          `thinking='${options.thinking}' was requested; either run 'claude update' or omit thinking.`,
+        );
+      }
+      args.push("--settings", JSON.stringify({ alwaysThinkingEnabled: options.thinking }));
     }
 
     return args;
