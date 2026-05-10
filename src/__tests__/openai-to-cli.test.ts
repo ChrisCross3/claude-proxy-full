@@ -9,6 +9,8 @@ import {
   extractPermissionMode,
   extractSystemPrompt,
   extractAppendSystemPrompt,
+  extractAgent,
+  extractAgents,
   messagesToPrompt,
   openaiToCli,
   resolveModelStrict,
@@ -446,4 +448,57 @@ test("openaiToCli omits system-prompt fields when unset", () => {
   const cli = openaiToCli(req as any);
   assert.equal(cli.systemPrompt, undefined);
   assert.equal(cli.appendSystemPrompt, undefined);
+});
+
+
+// --- extractAgent / extractAgents ---
+
+test("extractAgent accepts non-empty trimmed string", () => {
+  assert.equal(extractAgent("reviewer"), "reviewer");
+  assert.equal(extractAgent("  reviewer  "), "reviewer");
+});
+
+test("extractAgent returns undefined for unset / empty / non-string", () => {
+  assert.equal(extractAgent(undefined), undefined);
+  assert.equal(extractAgent(""), undefined);
+  assert.equal(extractAgent(42), undefined);
+});
+
+test("extractAgents accepts a plain non-empty object", () => {
+  const agents = { reviewer: { prompt: "Review the code" } };
+  assert.deepEqual(extractAgents(agents), agents);
+});
+
+test("extractAgents returns undefined for unset or empty object", () => {
+  assert.equal(extractAgents(undefined), undefined);
+  assert.equal(extractAgents(null), undefined);
+  assert.equal(extractAgents({}), undefined);
+});
+
+test("extractAgents throws on array, string, or primitive", () => {
+  assert.throws(() => extractAgents([]), /agents must be a JSON object/);
+  assert.throws(() => extractAgents("reviewer"), /agents must be a JSON object/);
+  assert.throws(() => extractAgents(42), /agents must be a JSON object/);
+  assert.throws(() => extractAgents(true), /agents must be a JSON object/);
+});
+
+test("openaiToCli forwards agent and agents independently", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    agent: "reviewer",
+    agents: { reviewer: { prompt: "Review" } },
+  };
+  const cli = openaiToCli(req as any);
+  assert.equal(cli.agent, "reviewer");
+  assert.deepEqual(cli.agents, { reviewer: { prompt: "Review" } });
+});
+
+test("openaiToCli throws when agents is an array (HTTP 400 path)", () => {
+  const req = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user" as const, content: "x" }],
+    agents: [{ reviewer: { prompt: "x" } }],
+  };
+  assert.throws(() => openaiToCli(req as any), /agents must be a JSON object/);
 });

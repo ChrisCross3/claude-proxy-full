@@ -45,6 +45,10 @@ export interface CliInput {
   systemPrompt?: string;
   /** Appended system prompt; mapped to claude --append-system-prompt. */
   appendSystemPrompt?: string;
+  /** Single named subagent; mapped to claude --agent. */
+  agent?: string;
+  /** Ad-hoc subagent definitions; mapped to claude --agents <inline JSON>. */
+  agents?: Record<string, unknown>;
 }
 
 /**
@@ -154,6 +158,33 @@ export function extractSystemPrompt(raw: unknown): string | undefined {
 
 export function extractAppendSystemPrompt(raw: unknown): string | undefined {
   return extractNonEmptyString(raw);
+}
+
+/**
+ * Extract a single-named agent identifier. Free-form (subagent names can be
+ * user-defined), but must be a non-empty string. Returns undefined for unset.
+ */
+export function extractAgent(raw: unknown): string | undefined {
+  return extractNonEmptyString(raw);
+}
+
+/**
+ * Validate and extract an inline agents map. Must be a plain object
+ * (Record<string, unknown>); other shapes throw ModelValidationError so the
+ * client gets HTTP 400 with a clear code. We do not validate the contents of
+ * each agent entry — Anthropic's CLI is the source of truth for that schema.
+ */
+export function extractAgents(raw: unknown): Record<string, unknown> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ModelValidationError(
+      `agents must be a JSON object mapping agent names to definitions, got ${Array.isArray(raw) ? 'array' : typeof raw}.`,
+      'agents_invalid',
+    );
+  }
+  const keys = Object.keys(raw as Record<string, unknown>);
+  if (keys.length === 0) return undefined;
+  return raw as Record<string, unknown>;
 }
 
 /**
@@ -311,6 +342,8 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   const permissionMode = extractPermissionMode(request.permission_mode);
   const systemPrompt = extractSystemPrompt(request.system_prompt);
   const appendSystemPrompt = extractAppendSystemPrompt(request.append_system_prompt);
+  const agent = extractAgent(request.agent);
+  const agents = extractAgents(request.agents);
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -323,5 +356,7 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(permissionMode ? { permissionMode } : {}),
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
+    ...(agent ? { agent } : {}),
+    ...(agents ? { agents } : {}),
   };
 }

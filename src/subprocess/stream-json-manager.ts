@@ -121,6 +121,10 @@ export interface StreamJsonOptions {
   systemPrompt?: string;
   /** Appended system prompt; mapped to claude --append-system-prompt. */
   appendSystemPrompt?: string;
+  /** Single named subagent; mapped to claude --agent. */
+  agent?: string;
+  /** Ad-hoc subagent definitions; mapped to claude --agents <JSON>. */
+  agents?: Record<string, unknown>;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -203,6 +207,15 @@ export class StreamJsonSubprocess extends EventEmitter {
     }
     if (options.appendSystemPrompt) {
       await pushClaudeFlagIfSupported(args, "--append-system-prompt", { value: options.appendSystemPrompt });
+    }
+
+    // Subagent selection: --agent NAME or --agents <inline JSON>. Both can
+    // coexist per Anthropic's docs (named selection + ad-hoc definitions).
+    if (options.agent) {
+      await pushClaudeFlagIfSupported(args, "--agent", { value: options.agent });
+    }
+    if (options.agents) {
+      await pushClaudeFlagIfSupported(args, "--agents", { value: JSON.stringify(options.agents) });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");

@@ -212,10 +212,10 @@ function recordSessionModeRejected(mode: ResolvedSessionOptions["mode"] | "stick
   stickyPoolCounters.modeRejected[mode]++;
 }
 
-async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt) return acquirePreInit(model);
+async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents });
   return subprocess;
 }
 
@@ -684,6 +684,8 @@ async function handleStreamJsonRequest(
       permissionMode: cliInput.permissionMode,
       systemPrompt: cliInput.systemPrompt,
       appendSystemPrompt: cliInput.appendSystemPrompt,
+      agent: cliInput.agent,
+      agents: cliInput.agents,
       sessionPolicy: sessionOptions.sticky.policy,
     });
     subprocess = sticky.subprocess;
@@ -701,19 +703,19 @@ async function handleStreamJsonRequest(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents);
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
   } else {
-    const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt });
+    const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents });
     subprocess = acquired.subprocess;
     tb.setSessionWarmHit(acquired.isWarm);
     const lastMessage = body.messages[body.messages.length - 1];
     userText = acquired.isWarm
       ? (bridgeTools ? messagesToPrompt([lastMessage], body) : acquired.lastUserText)
       : cliInput.prompt;
-    releaseSuccess = (assistantText) => returnSession(subprocess, model, body.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt });
+    releaseSuccess = (assistantText) => returnSession(subprocess, model, body.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents });
     releaseDiscard = () => discardSession(subprocess);
   }
 
@@ -1199,6 +1201,8 @@ async function handleResponsesStreamJson(
       permissionMode: cliInput.permissionMode,
       systemPrompt: cliInput.systemPrompt,
       appendSystemPrompt: cliInput.appendSystemPrompt,
+      agent: cliInput.agent,
+      agents: cliInput.agents,
       sessionPolicy: sessionOptions.sticky.policy,
     });
     subprocess = sticky.subprocess;
@@ -1216,19 +1220,19 @@ async function handleResponsesStreamJson(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents);
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
   } else {
-    const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt });
+    const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents });
     subprocess = acquired.subprocess;
     tb.setSessionWarmHit(acquired.isWarm);
     const lastMessage = chatReq.messages[chatReq.messages.length - 1];
     userText = acquired.isWarm
       ? (bridgeTools ? messagesToPrompt([lastMessage], chatReq) : acquired.lastUserText)
       : cliInput.prompt;
-    releaseSuccess = (assistantText) => returnSession(subprocess, model, chatReq.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt });
+    releaseSuccess = (assistantText) => returnSession(subprocess, model, chatReq.messages, assistantText, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents });
     releaseDiscard = () => discardSession(subprocess);
   }
 

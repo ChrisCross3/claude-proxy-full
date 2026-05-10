@@ -32,6 +32,8 @@ export interface StickySessionFingerprint {
   permissionModeKey: string;
   /** SHA-256 hex prefix of (systemPrompt + 0x1F + appendSystemPrompt); empty when both unset. */
   systemPromptKey: string;
+  /** SHA-256 hex prefix of (agent + 0x1F + JSON.stringify(agents)); empty when both unset. */
+  agentsKey: string;
   mcpPolicyKey: string;
   cwd: string;
   dynamicPromptExclusion: boolean;
@@ -81,6 +83,10 @@ export interface StickyAcquireOptions {
   systemPrompt?: string;
   /** Appended system prompt; part of the fingerprint. */
   appendSystemPrompt?: string;
+  /** Single named subagent; part of the fingerprint. */
+  agent?: string;
+  /** Ad-hoc subagent definitions; part of the fingerprint. */
+  agents?: Record<string, unknown>;
   mcpPolicyKey?: string;
   cwd?: string;
   dynamicPromptExclusion?: boolean;
@@ -143,6 +149,15 @@ function hashSystemPrompts(systemPrompt?: string, appendSystemPrompt?: string): 
   return h.digest("hex").slice(0, 16);
 }
 
+function hashAgents(agent?: string, agents?: Record<string, unknown>): string {
+  if (!agent && !agents) return "";
+  const h = createHash("sha256");
+  h.update(agent ?? "");
+  h.update("\x1f");
+  h.update(agents ? JSON.stringify(agents) : "");
+  return h.digest("hex").slice(0, 16);
+}
+
 export function parseStickyTtlMs(ttlSeconds: number): number {
   return Math.max(1, Math.trunc(ttlSeconds)) * 1000;
 }
@@ -173,6 +188,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     thinkingKey: options.thinking === undefined ? "" : (options.thinking ? "on" : "off"),
     permissionModeKey: options.permissionMode ?? "",
     systemPromptKey: hashSystemPrompts(options.systemPrompt, options.appendSystemPrompt),
+    agentsKey: hashAgents(options.agent, options.agents),
     mcpPolicyKey: options.mcpPolicyKey || defaultMcpPolicyKey(),
     cwd: options.cwd || process.cwd(),
     dynamicPromptExclusion: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1" || options.dynamicPromptExclusion === true,
@@ -215,7 +231,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -284,10 +300,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents });
   return subprocess;
 }
 
