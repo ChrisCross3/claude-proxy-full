@@ -35,7 +35,8 @@ import { getSecretResolutionDecisions, loadOpenclawMcpServers, type ResolvedMcpS
 import { applyMcpPolicy, secretDecisionsToTrace } from "../mcp/governance.js";
 import type { TraceMcpDecision } from "../trace/types.js";
 import { parseStreamJsonLine } from "./stream-json-parser.js";
-import { pushClaudeFlagIfSupported } from "./claude-flags.js";
+import { pushClaudeFlagIfSupported, supportsClaudeFlag } from "./claude-flags.js";
+import type { ClaudeEffort } from "../models/registry.js";
 
 const INIT_TIMEOUT_MS = 30000;
 const TURN_TIMEOUT_MS = 900000;
@@ -97,6 +98,12 @@ export interface StreamJsonOptions {
   cwd?: string;
   /** Per-process native Claude tool deny-list. Used for MCP overlap safety. */
   disallowedTools?: string[];
+  /**
+   * Effort level for the spawned Claude session.
+   * Maps to claude --effort. Must already be validated against the model's
+   * registry entry; this layer enforces only the CLI-capability presence.
+   */
+  effort?: ClaudeEffort;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -128,6 +135,20 @@ export class StreamJsonSubprocess extends EventEmitter {
     await pushClaudeFlagIfSupported(args, "--exclude-dynamic-system-prompt-sections", {
       requested: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1",
     });
+    // Effort: strict capability check. If the request asks for an effort level
+    // but the Claude CLI does not advertise --effort in claude --help, throw
+    // rather than silently spawn without it. Never let intent disappear into
+    // a degraded run.
+    if (options.effort) {
+      const supported = await supportsClaudeFlag("--effort");
+      if (!supported) {
+        throw new Error(
+          `Claude CLI does not support --effort (capability check via 'claude --help'). ` +
+          `reasoning_effort='${options.effort}' was requested; either run 'claude update' or omit reasoning_effort.`,
+        );
+      }
+      args.push("--effort", options.effort);
+    }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");
     }

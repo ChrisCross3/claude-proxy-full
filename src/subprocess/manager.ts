@@ -6,6 +6,8 @@
  */
 
 import { spawn, ChildProcess } from "child_process";
+import { supportsClaudeFlag } from "./claude-flags.js";
+import type { ClaudeEffort } from "../models/registry.js";
 import { EventEmitter } from "events";
 import fs from "fs/promises";
 import path from "path";
@@ -24,6 +26,12 @@ export interface SubprocessOptions {
   cwd?: string;
   timeout?: number;
   disallowedTools?: string[];
+  /**
+   * Effort level for the spawned Claude session.
+   * Maps to claude --effort. Capability-checked at spawn time; throws if the
+   * installed Claude CLI does not advertise --effort.
+   */
+  effort?: ClaudeEffort;
 }
 
 export interface SubprocessEvents {
@@ -51,7 +59,7 @@ export class ClaudeSubprocess extends EventEmitter {
    * pay the ~1.5s claude bootstrap cost ahead of a request.
    */
   async prepare(options: SubprocessOptions): Promise<void> {
-    const args = this.buildArgs(options);
+    const args = await this.buildArgs(options);
 
     return new Promise((resolve, reject) => {
       try {
@@ -171,7 +179,7 @@ export class ClaudeSubprocess extends EventEmitter {
    * Build CLI arguments array
    * Note: prompt is passed via stdin to avoid E2BIG errors with large prompts
    */
-  private buildArgs(options: SubprocessOptions): string[] {
+  private async buildArgs(options: SubprocessOptions): Promise<string[]> {
     const args = [
       "--print", // Non-interactive mode
       "--output-format",
@@ -198,6 +206,19 @@ export class ClaudeSubprocess extends EventEmitter {
 
     if (options.sessionId) {
       args.push("--session-id", options.sessionId);
+    }
+
+    // Effort: strict capability check, throw on mismatch — never spawn a
+    // degraded process when the caller asked for a specific level.
+    if (options.effort) {
+      const supported = await supportsClaudeFlag("--effort");
+      if (!supported) {
+        throw new Error(
+          `Claude CLI does not support --effort (capability check via 'claude --help'). ` +
+          `reasoning_effort='${options.effort}' was requested; either run 'claude update' or omit reasoning_effort.`,
+        );
+      }
+      args.push("--effort", options.effort);
     }
 
     return args;
