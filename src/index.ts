@@ -7,57 +7,29 @@
 
 import { startServer, stopServer, getServer } from "./server/index.js";
 import { verifyClaude, verifyAuth } from "./subprocess/manager.js";
+import { MODELS, type ClaudeModelDefinition } from "./models/registry.js";
 
 // Provider constants
 const PROVIDER_ID = "claude-code-cli";
 const PROVIDER_LABEL = "Claude Code CLI";
 const DEFAULT_PORT = 3456;
-const DEFAULT_MODEL = "claude-code-cli/claude-sonnet-4";
+const DEFAULT_MODEL = "claude-code-cli/claude-sonnet-4-6";
 
-// Available models
-const AVAILABLE_MODELS = [
-  {
-    id: "claude-opus-4-7",
-    name: "Claude Opus 4.7",
-    alias: "claude-opus-4-7",
-    reasoning: true,
-  },
-  {
-    id: "claude-opus-4-6",
-    name: "Claude Opus 4.6",
-    alias: "claude-opus-4-6",
-    reasoning: true,
-  },
-  {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
-    alias: "claude-sonnet-4-6",
-    reasoning: false,
-  },
-  {
-    id: "claude-haiku-4-5-20251001",
-    name: "Claude Haiku 4.5",
-    alias: "claude-haiku-4-5-20251001",
-    reasoning: false,
-  },
-  {
-    id: "claude-opus-4",
-    name: "Claude Opus 4 (legacy alias)",
-    alias: "opus",
-    reasoning: true,
-  },
-  {
-    id: "claude-sonnet-4",
-    name: "Claude Sonnet 4 (legacy alias)",
-    alias: "sonnet",
-    reasoning: false,
-  },
-];
+// Available models — derived from the model registry (single source of truth).
+// Add new models to src/models/registry.ts; this list follows automatically.
+const AVAILABLE_MODELS: ReadonlyArray<{ id: string; name: string; alias: string; reasoning: boolean }> =
+  MODELS.map((def) => ({
+    id: def.id,
+    name: def.name,
+    alias: def.id,
+    reasoning: def.effortLevels.length > 0,
+  }));
 
 /**
  * Build model definitions for Clawdbot config
  */
 function buildModelDefinition(model: (typeof AVAILABLE_MODELS)[number]) {
+  const def = MODELS.find((m) => m.id === model.id);
   return {
     id: model.id,
     name: model.name,
@@ -65,8 +37,11 @@ function buildModelDefinition(model: (typeof AVAILABLE_MODELS)[number]) {
     reasoning: model.reasoning,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 8192,
+    // Per-model values from the registry. Falls back to a conservative
+    // 200K/8K only if the model is missing from MODELS, which would be a
+    // programmer error — AVAILABLE_MODELS is derived from MODELS.
+    contextWindow: def?.contextWindow ?? 200000,
+    maxTokens: def?.maxOutputTokens ?? 8192,
   };
 }
 

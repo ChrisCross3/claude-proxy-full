@@ -19,6 +19,7 @@ import {
   type StickyEvictionReason,
 } from "../subprocess/sticky-session-pool.js";
 import { resolveSessionOptions, isSessionOptionsError, type ResolvedSessionOptions, type SessionOptionsError } from "./sticky-options.js";
+import { MODELS } from "../models/registry.js";
 import { extractModel, messagesToPrompt, openaiToCli } from "../adapter/openai-to-cli.js";
 import {
   cliResultToOpenai,
@@ -169,11 +170,9 @@ export const fallbackCounters = {
  * label values for /metrics. Bounded cardinality is critical — we never want
  * /metrics to grow unbounded labels from random model strings.
  */
-const KNOWN_MODEL_LABELS = new Set([
-  "claude-opus-4-7", "claude-opus-4-6", "claude-opus-4",
-  "claude-sonnet-4-6", "claude-sonnet-4",
-  "claude-haiku-4-5-20251001", "claude-haiku-4-5", "claude-haiku-4",
-]);
+// Canonical model IDs accepted as Prometheus labels — derived from the registry.
+// Unknown labels collapse to "other" to keep /metrics cardinality bounded.
+const KNOWN_MODEL_LABELS = new Set<string>(MODELS.map((m) => m.id));
 function canonicalizeModelLabel(model: string | undefined): string {
   if (!model) return "unknown";
   // Strip provider prefix (claude-proxy/ or claude-code-cli/).
@@ -1481,15 +1480,8 @@ async function handleResponsesStreaming(
  */
 export function handleModels(_req: Request, res: Response): void {
   const created = Math.floor(Date.now() / 1000);
-  const ids = [
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4",
-    "claude-sonnet-4",
-    "claude-haiku-4",
-  ];
+  // Advertised models — single source of truth is src/models/registry.ts.
+  const ids = MODELS.map((m) => m.id);
   res.json({
     object: "list",
     data: ids.map((id) => ({
