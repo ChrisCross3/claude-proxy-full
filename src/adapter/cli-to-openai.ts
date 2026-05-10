@@ -119,11 +119,15 @@ export function cliResultToOpenai(
   result: ClaudeCliResult,
   requestId: string,
   toolRequest?: Pick<OpenAIChatRequest, "tools" | "tool_choice">,
+  intendedModel?: string,
 ): OpenAIChatResponse {
-  // Get model from modelUsage or default
-  const modelName = result.modelUsage
-    ? Object.keys(result.modelUsage)[0]
-    : "claude-sonnet-4";
+  // Prefer the model the caller intended (i.e. the one resolved through the
+  // registry at request time). Claude CLI's stream-json output sometimes reports
+  // a different model in its assistant frame (cosmetic upstream quirk); we
+  // refuse to surface that in the OpenAI response. Falls back to modelUsage
+  // and finally to "unknown" so we never silently rewrite to a legacy alias.
+  const modelName = intendedModel
+    ?? (result.modelUsage ? Object.keys(result.modelUsage)[0] : "unknown");
 
   const usage = resultUsageToOpenAI(result);
   const rawText = ensureString(result.result);
