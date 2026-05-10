@@ -48,6 +48,10 @@ export interface SubprocessOptions {
   systemPrompt?: string;
   /** Appended system prompt; mapped to claude --append-system-prompt. */
   appendSystemPrompt?: string;
+  /** Single named subagent; mapped to claude --agent. */
+  agent?: string;
+  /** Ad-hoc subagent definitions; mapped to claude --agents <JSON>. */
+  agents?: Record<string, unknown>;
 }
 
 export interface SubprocessEvents {
@@ -284,6 +288,20 @@ export class ClaudeSubprocess extends EventEmitter {
       const supported = await supportsClaudeFlag("--append-system-prompt");
       if (supported) {
         args.push("--append-system-prompt", options.appendSystemPrompt);
+      }
+    }
+
+    // Subagent selection: --agent NAME and/or --agents <inline JSON>.
+    if (options.agent) {
+      const supported = await supportsClaudeFlag("--agent");
+      if (supported) {
+        args.push("--agent", options.agent);
+      }
+    }
+    if (options.agents) {
+      const supported = await supportsClaudeFlag("--agents");
+      if (supported) {
+        args.push("--agents", JSON.stringify(options.agents));
       }
     }
 

@@ -93,6 +93,17 @@ export interface OpenAIChatRequest {
    * Mapped to claude --append-system-prompt.
    */
   append_system_prompt?: string;
+  /**
+   * Select a single named subagent for the session. Mapped to claude --agent.
+   * Free-form string — subagent names can be user-defined, so no whitelist.
+   */
+  agent?: string;
+  /**
+   * Define ad-hoc subagents inline as a JSON object. Mapped to claude --agents
+   * with the JSON serialized as a single CLI argument. Must be a plain object;
+   * other shapes (string, array, primitive) throw HTTP 400 invalid_request_error.
+   */
+  agents?: Record<string, unknown>;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
@@ -276,6 +287,10 @@ export interface ResponsesRequest {
   system_prompt?: string;
   /** Append text to the system prompt. */
   append_system_prompt?: string;
+  /** Select a single named subagent. */
+  agent?: string;
+  /** Define ad-hoc subagents inline as a JSON object. */
+  agents?: Record<string, unknown>;
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
