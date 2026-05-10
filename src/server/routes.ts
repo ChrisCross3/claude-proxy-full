@@ -23,6 +23,7 @@ import {
 import { resolveSessionOptions, isSessionOptionsError, type ResolvedSessionOptions, type SessionOptionsError } from "./sticky-options.js";
 import { MODELS } from "../models/registry.js";
 import { extractModel, messagesToPrompt, openaiToCli, ModelValidationError } from "../adapter/openai-to-cli.js";
+import { normalizeOpenRouterRequest } from "../adapter/openrouter-normalize.js";
 import {
   cliResultToOpenai,
   createDoneChunk,
@@ -247,6 +248,7 @@ export async function handleChatCompletions(
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const traceId = `trc_${requestId}`;
   const body = req.body as OpenAIChatRequest;
+  normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
   const stream = body.stream === true;
   const reqStart = Date.now();
   let usedRuntime: "stream-json" | "print" = "stream-json";
@@ -1069,6 +1071,7 @@ export async function handleResponses(
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const traceId = `trc_${requestId}`;
   const body = req.body as ResponsesRequest;
+  normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
   const stream = body.stream === true;
   const reqStart = Date.now();
   let usedRuntime: "stream-json" | "print" = "print";
