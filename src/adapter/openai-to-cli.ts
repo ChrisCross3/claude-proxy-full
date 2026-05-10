@@ -49,6 +49,14 @@ export interface CliInput {
   agent?: string;
   /** Ad-hoc subagent definitions; mapped to claude --agents <inline JSON>. */
   agents?: Record<string, unknown>;
+  /** Minimal-mode spawn (claude --bare). */
+  bare?: boolean;
+  /** Disable slash commands. */
+  disableSlashCommands?: boolean;
+  /** JSON Schema for structured output (print-mode only). */
+  jsonSchema?: Record<string, unknown>;
+  /** Cap agentic turns (print-mode only). */
+  maxTurns?: number;
 }
 
 /**
@@ -185,6 +193,54 @@ export function extractAgents(raw: unknown): Record<string, unknown> | undefined
   const keys = Object.keys(raw as Record<string, unknown>);
   if (keys.length === 0) return undefined;
   return raw as Record<string, unknown>;
+}
+
+/** Normalize a boolean-ish input. Returns undefined for unset/non-boolean. */
+function extractBoolean(raw: unknown): boolean | undefined {
+  if (raw === true || raw === false) return raw;
+  return undefined;
+}
+
+export function extractBare(raw: unknown): boolean | undefined {
+  return extractBoolean(raw);
+}
+
+export function extractDisableSlashCommands(raw: unknown): boolean | undefined {
+  return extractBoolean(raw);
+}
+
+/**
+ * Validate and extract a JSON Schema object. Same shape rules as extractAgents:
+ * must be a plain object, otherwise ModelValidationError -> HTTP 400. Empty
+ * object is rejected too — a schema of {} is meaningless and almost certainly
+ * a caller bug worth surfacing.
+ */
+export function extractJsonSchema(raw: unknown): Record<string, unknown> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ModelValidationError(
+      `json_schema must be a JSON object, got ${Array.isArray(raw) ? 'array' : typeof raw}.`,
+      'json_schema_invalid',
+    );
+  }
+  const keys = Object.keys(raw as Record<string, unknown>);
+  if (keys.length === 0) {
+    throw new ModelValidationError(
+      `json_schema must be a non-empty schema object.`,
+      'json_schema_invalid',
+    );
+  }
+  return raw as Record<string, unknown>;
+}
+
+/**
+ * Extract a positive integer max-turns value. Like extractMaxBudgetUsd,
+ * but integer-only (the CLI treats fractional turn counts undefined).
+ */
+export function extractMaxTurns(raw: unknown): number | undefined {
+  if (typeof raw !== 'number') return undefined;
+  if (!Number.isFinite(raw) || !Number.isInteger(raw)) return undefined;
+  return raw > 0 ? raw : undefined;
 }
 
 /**
@@ -344,6 +400,10 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   const appendSystemPrompt = extractAppendSystemPrompt(request.append_system_prompt);
   const agent = extractAgent(request.agent);
   const agents = extractAgents(request.agents);
+  const bare = extractBare(request.bare);
+  const disableSlashCommands = extractDisableSlashCommands(request.disable_slash_commands);
+  const jsonSchema = extractJsonSchema(request.json_schema);
+  const maxTurns = extractMaxTurns(request.max_turns);
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -358,5 +418,9 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
     ...(agent ? { agent } : {}),
     ...(agents ? { agents } : {}),
+    ...(bare !== undefined ? { bare } : {}),
+    ...(disableSlashCommands !== undefined ? { disableSlashCommands } : {}),
+    ...(jsonSchema ? { jsonSchema } : {}),
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
   };
 }
