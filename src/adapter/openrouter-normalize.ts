@@ -51,11 +51,16 @@ export function normalizeOpenRouterRequest(req: AnyRecord): void {
     req.model = stripOpenRouterPrefix(req.model);
   }
 
+  // OpenRouter-client sends reasoning as a top-level field (OpenAI-Responses-style);
+  // OpenRouter docs also accept extra_body.reasoning. Support both, prefer top-level.
   const extra = req.extra_body;
-  if (!isPlainObject(extra)) return;
-
-  const reasoning = extra.reasoning;
-  if (!isPlainObject(reasoning)) return;
+  const reasoning =
+    isPlainObject(req.reasoning)
+      ? (req.reasoning as AnyRecord)
+      : isPlainObject(extra) && isPlainObject((extra as AnyRecord).reasoning)
+        ? ((extra as AnyRecord).reasoning as AnyRecord)
+        : null;
+  if (!reasoning) return;
 
   const effortRaw = reasoning.effort;
   const enabled = reasoning.enabled;
