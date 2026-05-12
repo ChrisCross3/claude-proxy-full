@@ -22,6 +22,7 @@
  */
 
 import { createHash } from "crypto";
+import { stableStringify } from "./fingerprint.js";
 import { StreamJsonSubprocess } from "./stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
@@ -135,24 +136,10 @@ function systemPromptKey(systemPrompt?: string, appendSystemPrompt?: string): st
   return h.digest("hex").slice(0, 16);
 }
 
-/**
- * Deterministic JSON.stringify with object keys sorted at every level.
- * Used so semantically-equal `agents` records (same keys, different insertion
- * order) hash identically. Exported for unit-test visibility.
- */
-export function stableStringify(value: unknown): string {
-  // JSON.stringify(undefined) returns the string "undefined" (not valid JSON);
-  // canonicalize to "null" so undefined values can participate in deterministic
-  // fingerprints without producing literal "undefined" tokens in the output.
-  if (value === undefined) return "null";
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return "[" + value.map(stableStringify).join(",") + "]";
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return "{" + keys.map(k => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
-}
+// Backwards-compat re-export: existing tests import stableStringify from this
+// module. The implementation now lives in ./fingerprint.ts so the sticky pool
+// can share it without a circular import.
+export { stableStringify };
 
 function agentsKey(agent?: string, agents?: Record<string, unknown>): string {
   if (!agent && !agents) return "";
