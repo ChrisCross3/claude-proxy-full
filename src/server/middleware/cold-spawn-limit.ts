@@ -84,13 +84,22 @@ export function extractCallerKey(req: Request): string {
   if (typeof auth === "string" && auth.length > 0) {
     return "a:" + createHash("sha256").update(auth).digest("hex").slice(0, 16);
   }
-  const xff = req.headers?.["x-forwarded-for"];
-  let xffFirst: string | undefined;
-  if (typeof xff === "string") xffFirst = xff.split(",")[0]?.trim();
-  else if (Array.isArray(xff) && xff.length > 0) xffFirst = xff[0]?.split(",")[0]?.trim();
-  if (xffFirst) return "x:" + xffFirst;
+  // Only honor X-Forwarded-For when Express is configured to trust a proxy.
+  // Otherwise an unauthenticated caller could spoof the header and evade
+  // per-IP rate limits.
+  const trustProxy = (req as { app?: { get?: (k: string) => unknown } }).app?.get?.("trust proxy");
+  if (trustProxy !== false) {
+    const xff = req.headers?.["x-forwarded-for"];
+    let xffFirst: string | undefined;
+    if (typeof xff === "string") xffFirst = xff.split(",")[0]?.trim();
+    else if (Array.isArray(xff) && xff.length > 0) xffFirst = xff[0]?.split(",")[0]?.trim();
+    if (xffFirst) return "x:" + xffFirst;
+  }
 
-  const ip = (req as { ip?: string }).ip;
+  // Prefer req.ip (Express resolves via trust proxy setting); fall back to
+  // the socket remote address when running without Express request semantics.
+  const ip = (req as { ip?: string }).ip
+    ?? (req as { socket?: { remoteAddress?: string } }).socket?.remoteAddress;
   if (ip) return "i:" + ip;
   return "anon";
 }

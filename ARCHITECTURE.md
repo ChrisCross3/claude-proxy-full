@@ -54,6 +54,7 @@ Streaming / sticky:
 |---|---|
 | `src/models/registry.ts` | Canonical `MODELS` (single source of truth — siehe `MODEL_DRIFT.md`) |
 | `src/server/standalone.ts` | Express-App, Port-Bind, `preWarm()` |
+| `src/server/trust-proxy.ts` | `configureTrustProxy(app)` aus `CLAUDE_PROXY_TRUST_PROXY` (default `false`). Wird im Bootstrap nach `express()` aufgerufen — entscheidet, ob `X-Forwarded-For` für `req.ip` und die Cold-Spawn-Caller-Key-Extraction zählt. |
 | `src/server/routes.ts` | Route-Handler für `/v1/*`, `/models`, `/metrics` |
 | `src/server/metrics.ts` | Prometheus-Counter/Histogram, `KNOWN_MODEL_LABELS` |
 | `src/server/middleware/auth.ts` | Bearer-Token-Check (optional, `CLAUDE_PROXY_API_KEY`) |
