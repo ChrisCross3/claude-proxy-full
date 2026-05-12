@@ -8,6 +8,7 @@ import express, { Express, Request, Response, NextFunction } from "express";
 import { createServer, Server } from "http";
 import { handleChatCompletions, handleModels, handleHealth, handleHealthDeep, handlePricing, handleResponses, handleTraceGet, handleTraceList } from "./routes.js";
 import { handleMetrics } from "./metrics.js";
+import { corsMiddleware } from "./middleware/cors.js";
 
 export interface ServerConfig {
   port: number;
@@ -33,18 +34,9 @@ function createApp(): Express {
     next();
   });
 
-  // CORS headers for local development
-  app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    next();
-  });
-
-  // Handle OPTIONS preflight
-  app.options("*", (_req: Request, res: Response) => {
-    res.sendStatus(200);
-  });
+  // CORS (opt-in whitelist via CLAUDE_PROXY_ALLOWED_ORIGINS — default: no headers).
+  // The middleware handles OPTIONS preflights itself, so no separate app.options.
+  app.use(corsMiddleware());
 
   // Routes — register both /v1/* and /* paths so clients that omit the
   // /v1 prefix (e.g. OpenCLAW's openai-completions provider) still work.
