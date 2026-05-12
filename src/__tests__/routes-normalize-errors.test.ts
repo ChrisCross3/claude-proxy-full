@@ -104,6 +104,17 @@ test('handleChatCompletions: numeric reasoning.effort returns HTTP 400 reasoning
   assert.equal(body.error.code, 'reasoning_invalid');
 });
 
+test('handleResponses: unknown model id returns HTTP 400 unknown_model (not a process crash)', async () => {
+  const { res, state } = makeRes();
+  const req = makeReq({ model: 'gpt-4-totally-unknown', input: 'Hi' });
+  await handleResponses(req, res);
+  assert.equal(state.statusCode, 400);
+  assert.ok(state.headersSent);
+  const body = state.body as { error: { code: string; type: string } };
+  assert.equal(body.error.code, 'unknown_model');
+  assert.equal(body.error.type, 'invalid_request_error');
+});
+
 test('handleResponses: nested reasoning.effort returns HTTP 400 reasoning_invalid', async () => {
   const { res, state } = makeRes();
   const req = makeReq({

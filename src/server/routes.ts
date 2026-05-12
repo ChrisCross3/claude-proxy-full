@@ -1137,10 +1137,23 @@ export async function handleResponses(
   const reqStart = Date.now();
   let usedRuntime: "stream-json" | "print" = "print";
 
+  // Resolve the model defensively: registry throws on unknown ids, which is a
+  // client error, not a server crash. Catch before the trace builder runs.
+  let resolvedModel: string;
+  try {
+    resolvedModel = extractModel(body.model);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown model";
+    res.status(400).json({
+      error: { message, type: "invalid_request_error", code: "unknown_model" },
+    });
+    return;
+  }
+
   const tb = createTraceBuilder({
     traceId,
     requestId,
-    model: extractModel(body.model),
+    model: resolvedModel,
     requestedModel: body.model || "unknown",
     stream,
     endpoint: "responses",
