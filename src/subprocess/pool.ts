@@ -16,8 +16,12 @@
 import { ClaudeSubprocess } from "./manager.js";
 import type { SubprocessOptions } from "./manager.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
+import { consumeColdSpawnToken, ColdSpawnRateLimitedError } from "../server/middleware/cold-spawn-limit.js";
 
-export type AcquireOptions = Omit<SubprocessOptions, "model" | "sessionId" | "cwd" | "timeout">;
+export type AcquireOptions = Omit<SubprocessOptions, "model" | "sessionId" | "cwd" | "timeout"> & {
+  /** Caller key for cold-spawn rate-limit accounting. Optional; warm hits never consume. */
+  callerKey?: string;
+};
 
 const MAX_IDLE_MS = 2500; // <3s claude --print stdin deadline
 const ENABLED = process.env.CLAUDE_PROXY_WARM_POOL === "1";
@@ -56,6 +60,10 @@ export async function acquireSubprocess(
     || options.maxTurns !== undefined;
 
   if (!ENABLED || needsDedicated) {
+    if (options.callerKey) {
+      const limit = consumeColdSpawnToken(options.callerKey);
+      if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
+    }
     const sub = new ClaudeSubprocess();
     await sub.prepare({ model, ...options });
     return sub;
@@ -76,6 +84,10 @@ export async function acquireSubprocess(
         `[Pool] Stale slot for ${model}: age=${ageMs}ms ${JSON.stringify(healthDetails)}`,
       );
       slot.subprocess.kill();
+    }
+    if (options.callerKey) {
+      const limit = consumeColdSpawnToken(options.callerKey);
+      if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
     }
     const sub = new ClaudeSubprocess();
     await sub.prepare({ model });

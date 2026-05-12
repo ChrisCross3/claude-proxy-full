@@ -31,6 +31,7 @@ export type ProtocolErrorClass =
   // Client errors
   | "invalid_request"
   | "client_disconnect"
+  | "cold_spawn_rate_limited"
   // Proxy internal
   | "internal_error"
   // Unknown / catch-all
@@ -43,6 +44,7 @@ export type ProtocolErrorClass =
  */
 export function classifyError(err: unknown): ProtocolErrorClass {
   if (!(err instanceof Error)) return "unknown";
+  if ((err as { code?: string }).code === "cold_spawn_rate_limited") return "cold_spawn_rate_limited";
   const msg = err.message.toLowerCase();
 
   // Stream-layer faults (transport)
