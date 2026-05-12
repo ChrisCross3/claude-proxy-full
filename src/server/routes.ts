@@ -879,6 +879,7 @@ async function handleStreamJsonRequest(
   // -------------------- Upstream Soft-Dead Watchdog ---------------------
   const WATCHDOG_CHECK_MS = 30_000;
   let watchdogFired = false;
+  let clientClosed = false;
   const watchdogTimer = setInterval(() => {
     if (done || watchdogFired) return;
     const snap = subprocess.snapshot();
@@ -977,6 +978,7 @@ async function handleStreamJsonRequest(
 
   res.on("close", () => {
     if (!done) {
+      clientClosed = true;
       console.error(`[StreamJson] client disconnected pre-completion req_id=${requestId} keepalives=${keepaliveCount} lastClientIdleMs=${Date.now() - lastClientActivityAt} lastClaudeIdleMs=${Date.now() - lastClaudeActivityAt}`);
       releaseDiscard("client_disconnect");
     }
@@ -1032,6 +1034,17 @@ async function handleStreamJsonRequest(
   } catch (err) {
     // If the watchdog already fired and handled cleanup, skip duplicate work.
     if (watchdogFired) return;
+    // If the client already closed the connection, the close handler has
+    // already released the subprocess with reason="client_disconnect" and
+    // the error here is the resulting submitTurn rejection — do not
+    // reclassify it as a turn_error and do not double-release.
+    if (clientClosed) {
+      done = true;
+      tb.setError("client_disconnect", err instanceof Error ? err.message : "client disconnected");
+      tb.commit();
+      console.error(`[StreamJson] turn aborted by client disconnect req_id=${requestId}`);
+      return;
+    }
     done = true;
     releaseDiscard("turn_error");
     const message = err instanceof Error ? err.message : "Unknown error";
