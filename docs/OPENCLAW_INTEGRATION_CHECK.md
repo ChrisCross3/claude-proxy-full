@@ -12,7 +12,7 @@ Last checked: 2026-05-01 Europe/Zurich.
   - `claude-opus-4-7`
   - `claude-opus-4-6`
   - `claude-sonnet-4-6`
-  - `claude-haiku-4-5-20251001`
+  - `claude-haiku-4-5`
 
 ## Model picker allowlist
 
@@ -21,7 +21,7 @@ Last checked: 2026-05-01 Europe/Zurich.
 - `claude-proxy/claude-opus-4-7`
 - `claude-proxy/claude-opus-4-6`
 - `claude-proxy/claude-sonnet-4-6`
-- `claude-proxy/claude-haiku-4-5-20251001`
+- `claude-proxy/claude-haiku-4-5`
 
 If a new Claude model is added, update both the provider model list and this allowlist, then run the model-drift tests.
 

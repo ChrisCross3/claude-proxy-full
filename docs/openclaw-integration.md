@@ -61,7 +61,7 @@ Example:
             "maxTokens": 8192
           },
           {
-            "id": "claude-haiku-4-5-20251001",
+            "id": "claude-haiku-4-5",
             "name": "Claude Haiku 4.5 (via claude-proxy)",
             "api": "openai-completions",
             "input": ["text"],
@@ -89,7 +89,7 @@ Make the models available to agents. Exact config shape can vary by OpenClaw ver
         "claude-proxy/claude-opus-4-7",
         "claude-proxy/claude-opus-4-6",
         "claude-proxy/claude-sonnet-4-6",
-        "claude-proxy/claude-haiku-4-5-20251001"
+        "claude-proxy/claude-haiku-4-5"
       ]
     }
   }

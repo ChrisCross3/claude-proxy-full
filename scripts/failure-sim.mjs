@@ -10,7 +10,7 @@
  */
 
 const BASE_URL = process.env.FAILURE_SIM_BASE_URL || "http://127.0.0.1:3456";
-const MODEL = process.env.FAILURE_SIM_MODEL || "claude-haiku-4-5-20251001";
+const MODEL = process.env.FAILURE_SIM_MODEL || "claude-haiku-4-5";
 const TIMEOUT_MS = Number(process.env.FAILURE_SIM_TIMEOUT_MS || 90_000);
 
 function log(ok, name, detail = "") {

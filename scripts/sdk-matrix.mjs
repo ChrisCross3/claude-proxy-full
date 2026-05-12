@@ -11,7 +11,7 @@
 import { spawnSync } from "node:child_process";
 
 const BASE_URL = process.env.SDK_MATRIX_BASE_URL || "http://127.0.0.1:3456";
-const MODEL = process.env.SDK_MATRIX_MODEL || "claude-haiku-4-5-20251001";
+const MODEL = process.env.SDK_MATRIX_MODEL || "claude-haiku-4-5";
 const TIMEOUT_MS = Number(process.env.SDK_MATRIX_TIMEOUT_MS || 90_000);
 const REQUIRE_OPTIONAL = process.env.SDK_MATRIX_REQUIRE_OPTIONAL === "1";
 const PYTHON = process.env.SDK_MATRIX_PYTHON || "python3";

@@ -18,7 +18,7 @@
  *   SOAK_BASE_URL=http://127.0.0.1:3456 \
  *   SOAK_CONCURRENCY=4 \
  *   SOAK_TIMEOUT_MS=30000 \
- *   SOAK_MODEL=claude-haiku-4-5-20251001 \
+ *   SOAK_MODEL=claude-haiku-4-5 \
  *     node scripts/soak.mjs
  *
  * npm scripts:
@@ -29,7 +29,7 @@
 const BASE_URL = process.env.SOAK_BASE_URL || "http://127.0.0.1:3456";
 const CONCURRENCY = parseInt(process.env.SOAK_CONCURRENCY || "2", 10);
 const TIMEOUT_MS = parseInt(process.env.SOAK_TIMEOUT_MS || "30000", 10);
-const MODEL = process.env.SOAK_MODEL || "claude-haiku-4-5-20251001";
+const MODEL = process.env.SOAK_MODEL || "claude-haiku-4-5";
 
 const results = [];
 let passed = 0;

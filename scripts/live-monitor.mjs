@@ -11,7 +11,7 @@
 import { spawn } from "node:child_process";
 
 const BASE_URL = process.env.CLAUDE_PROXY_MONITOR_BASE_URL || "http://127.0.0.1:3456";
-const MODEL = process.env.CLAUDE_PROXY_MONITOR_MODEL || "claude-haiku-4-5-20251001";
+const MODEL = process.env.CLAUDE_PROXY_MONITOR_MODEL || "claude-haiku-4-5";
 const TIMEOUT_MS = Number(process.env.CLAUDE_PROXY_MONITOR_TIMEOUT_MS || 60_000);
 const ALERT_COMMAND = process.env.CLAUDE_PROXY_MONITOR_ALERT_COMMAND || "";
 

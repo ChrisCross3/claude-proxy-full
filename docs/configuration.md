@@ -58,7 +58,7 @@ These variables affect the persistent `stream-json` runtime.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CLAUDE_PROXY_PREWARM_MODELS` | `claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5-20251001` | Comma-separated models to pre-initialize at startup. |
+| `CLAUDE_PROXY_PREWARM_MODELS` | `claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5` | Comma-separated models to pre-initialize at startup. |
 | `CLAUDE_PROXY_INIT_POOL` | enabled | Set `0` to disable the per-model init pool. |
 | `CLAUDE_PROXY_POOL_TTL_MS` | `600000` | Idle TTL for session-pool workers. Floored internally to avoid evicting during the prompt-cache window. |
 | `CLAUDE_PROXY_POOL_MAX` | `4` | Maximum live workers in the session pool. |
@@ -129,10 +129,10 @@ The proxy exposes current Claude model ids through `/models` and `/v1/models`. C
 claude-opus-4-7
 claude-opus-4-6
 claude-sonnet-4-6
-claude-haiku-4-5-20251001
+claude-haiku-4-5
 ```
 
-Provider-prefixed ids such as `claude-proxy/claude-sonnet-4-6` are accepted by the model normalizer for OpenClaw-style clients.
+Provider-prefixed ids such as `claude-proxy/claude-sonnet-4-6` are accepted by the model normalizer for OpenClaw-style clients. The dated alias `claude-haiku-4-5-20251001` is also still accepted (alongside the canonical `claude-haiku-4-5`) for backwards compatibility.
 
 ## Tracing
 
@@ -371,7 +371,7 @@ All three remain opt-in to preserve the zero-config local-dev experience.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CLAUDE_PROXY_MONITOR_BASE_URL` | `http://127.0.0.1:3456` | Proxy URL to monitor. |
-| `CLAUDE_PROXY_MONITOR_MODEL` | `claude-haiku-4-5-20251001` | Model used for the tiny monitor request. |
+| `CLAUDE_PROXY_MONITOR_MODEL` | `claude-haiku-4-5` | Model used for the tiny monitor request. |
 | `CLAUDE_PROXY_MONITOR_TIMEOUT_MS` | `60000` | Monitor timeout. |
 | `CLAUDE_PROXY_MONITOR_ALERT_COMMAND` | unset | Optional command run on failure. Receives the alert body on stdin and in `CLAUDE_PROXY_MONITOR_MESSAGE`. |
 
