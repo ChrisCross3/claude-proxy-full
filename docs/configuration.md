@@ -255,6 +255,72 @@ Recommended private LaunchAgent pattern:
 
 Do not commit real n8n API keys or private n8n URLs to the repository.
 
+## Security / Hardening
+
+Three opt-in middleware features harden the proxy against credential misuse, cross-origin abuse, and cold-spawn floods. All three are **off by default** to keep the default loopback developer experience unchanged. Enable them when the proxy is exposed beyond a single trusted user, or when you observe abuse patterns.
+
+### Bearer-token authentication
+
+When enabled, every request must carry `Authorization: Bearer <token>`. A small allowlist of health/metrics/pricing paths is permitted without auth so probes keep working.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CLAUDE_PROXY_API_KEY` | unset | Single shared bearer token. Mutually compatible with `CLAUDE_PROXY_API_KEYS`. |
+| `CLAUDE_PROXY_API_KEYS` | unset | Comma-separated list of accepted bearer tokens. Useful for per-caller key rotation. |
+
+Always-allowed paths (no auth required): `/health`, `/healthz`, `/healthz/deep`, `/metrics`, `/pricing`, `/v1/pricing`.
+
+Example:
+
+```bash
+CLAUDE_PROXY_API_KEY="$(openssl rand -hex 32)" npm start
+```
+
+Implementation: `src/server/middleware/auth.ts`.
+
+### CORS origin whitelist
+
+When set, only listed origins receive CORS allow-headers. Other origins get a same-origin response with no `Access-Control-Allow-Origin` header.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CLAUDE_PROXY_ALLOWED_ORIGINS` | unset | Comma-separated list of allowed origins. The special token `loopback` expands to match `http://localhost:*` and `http://127.0.0.1:*`. The wildcard `*` is only honored when `CLAUDE_PROXY_API_KEY`/`_API_KEYS` is also set — otherwise the proxy logs a warning and falls back to an empty whitelist. |
+
+Example:
+
+```bash
+CLAUDE_PROXY_ALLOWED_ORIGINS="loopback,https://app.example.com" npm start
+```
+
+Implementation: `src/server/middleware/cors.ts`.
+
+### Cold-spawn rate limit
+
+A token bucket throttles **cold-spawn** requests per caller — that is, requests that have to spin up a fresh Claude CLI subprocess. Warm hits against the existing pool are not counted. The caller key is selected in priority order: hashed API key → first `X-Forwarded-For` entry → remote IP → `"anon"`. Rejected requests return `HTTP 429` with a `Retry-After` header.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CLAUDE_PROXY_COLD_SPAWN_LIMIT_PER_MIN` | `0` (disabled) | Sustained cold-spawn rate per caller. Set a positive integer to enable. |
+| `CLAUDE_PROXY_COLD_SPAWN_BURST` | code default | Maximum burst size in the token bucket. |
+
+Example:
+
+```bash
+CLAUDE_PROXY_COLD_SPAWN_LIMIT_PER_MIN=20 \
+CLAUDE_PROXY_COLD_SPAWN_BURST=5 \
+npm start
+```
+
+Implementation: `src/server/middleware/cold-spawn-limit.ts`.
+
+### Recommended rollout
+
+1. **First**: enable CORS whitelist + Bearer-Auth together (`CLAUDE_PROXY_ALLOWED_ORIGINS` plus `CLAUDE_PROXY_API_KEY`). These two together close the obvious cross-origin and unauthenticated-caller holes.
+2. **Then**: measure baseline cold-spawn volume from logs/metrics for a few days.
+3. **Finally**: enable `CLAUDE_PROXY_COLD_SPAWN_LIMIT_PER_MIN` with a budget slightly above measured peak. Tune `_BURST` for legitimate burst traffic patterns.
+
+All three remain opt-in to preserve the zero-config local-dev experience.
+
 ## Live monitor
 
 `npm run monitor:live` checks `/health` and one tiny chat request.
