@@ -7,6 +7,7 @@ import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { messagesToPrompt } from "../adapter/openai-to-cli.js";
 import type { OpenAIChatMessage, OpenAIChatRequest } from "../types/openai.js";
 import { stickySessionConfigFromEnv } from "../server/sticky-options.js";
+import { consumeColdSpawnToken, ColdSpawnRateLimitedError } from "../server/middleware/cold-spawn-limit.js";
 
 export type StickyEvictionReason =
   | "reset"
@@ -101,6 +102,9 @@ export interface StickyAcquireOptions {
   cwd?: string;
   dynamicPromptExclusion?: boolean;
   sessionPolicy?: string;
+  /** Caller key for cold-spawn rate-limit accounting. Optional; when unset
+   *  the limit is bypassed for this acquire (warm hits don't pay tokens). */
+  callerKey?: string;
 }
 
 export interface StickyAcquireResult {
@@ -247,6 +251,10 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     }
 
     evictLRU(config.maxSessions);
+    if (options.callerKey) {
+      const limit = consumeColdSpawnToken(options.callerKey);
+      if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
+    }
     const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents, options.bare, options.disableSlashCommands, options.jsonSchema, options.maxTurns);
     const now = Date.now();
     const slot: StickySlot = {

@@ -52,6 +52,7 @@ import {
   buildStreamDoneEvents,
 } from "../adapter/responses.js";
 import { classifyError, isStreamLayerFault, type ProtocolErrorClass } from "../errors.js";
+import { extractCallerKey, isColdSpawnRateLimitedError, ColdSpawnRateLimitedError, consumeColdSpawnToken } from "./middleware/cold-spawn-limit.js";
 import { classifyTurnError } from "./turn-error-classifier.js";
 import { createTraceBuilder, type TraceBuilder } from "../trace/builder.js";
 import { traceStore } from "../trace/store.js";
@@ -238,7 +239,12 @@ function recordSessionModeRejected(mode: ResolvedSessionOptions["mode"] | "stick
   stickyPoolCounters.modeRejected[mode]++;
 }
 
-async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number): Promise<StreamJsonSubprocess> {
+async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string): Promise<StreamJsonSubprocess> {
+  // Stateless always cold-spawns; charge a token if a callerKey is provided.
+  if (callerKey) {
+    const limit = consumeColdSpawnToken(callerKey);
+    if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
+  }
   if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
   await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns });
@@ -256,6 +262,19 @@ function sendStickyBusy(res: Response, message = "Sticky session is busy"): void
         message,
         type: "rate_limit_error",
         code: "sticky_session_busy",
+      },
+    });
+  }
+}
+
+function sendColdSpawnLimited(res: Response, retryAfterSec: number): void {
+  if (!res.headersSent) {
+    res.setHeader("Retry-After", String(Math.max(1, Math.ceil(retryAfterSec))));
+    res.status(429).json({
+      error: {
+        message: "Cold-spawn rate limit exceeded",
+        type: "rate_limit_error",
+        code: "cold_spawn_rate_limited",
       },
     });
   }
@@ -383,6 +402,12 @@ export async function handleChatCompletions(
           sendStickyBusy(res, (err as Error).message === "sticky_session_capacity_busy" ? "Sticky session pool is at capacity and all sessions are busy" : "Sticky session is busy");
           return;
         }
+        if (isColdSpawnRateLimitedError(err)) {
+          tb.setError("cold_spawn_rate_limited", err.message);
+          tb.commit();
+          sendColdSpawnLimited(res, err.retryAfterSec);
+          return;
+        }
         const errClass = classifyAndRecordError(err);
         // Auto-fallback: only fires when CLAUDE_PROXY_FALLBACK_ON_STREAM_FAILURE=1,
         // the failure is a recognized stream-layer fault, AND no SSE bytes
@@ -416,8 +441,14 @@ export async function handleChatCompletions(
     const cliInput = openaiToCli(body);
     let subprocess: ClaudeSubprocess;
     try {
-      subprocess = await acquireSubprocess(cliInput.model, toAcquireOptions(cliInput));
+      subprocess = await acquireSubprocess(cliInput.model, { ...toAcquireOptions(cliInput), callerKey: extractCallerKey(req) });
     } catch (err) {
+      if (isColdSpawnRateLimitedError(err)) {
+        sendColdSpawnLimited(res, err.retryAfterSec);
+        tb.setError("cold_spawn_rate_limited", err.message);
+        tb.commit();
+        return;
+      }
       recordSpawnFailure("print");
       tb.setError(classifyError(err), (err as Error).message);
       tb.commit();
@@ -445,6 +476,8 @@ export async function handleChatCompletions(
             code: error.code,
           },
         });
+      } else if (isColdSpawnRateLimitedError(error)) {
+        sendColdSpawnLimited(res, error.retryAfterSec);
       } else {
         res.status(500).json({
           error: {
@@ -696,7 +729,7 @@ async function handleNonStreamingResponse(
  * a new one (cold: sends the conversation as one flat user message).
  */
 async function handleStreamJsonRequest(
-  _req: Request,
+  req: Request,
   res: Response,
   model: string,
   body: OpenAIChatRequest,
@@ -707,6 +740,7 @@ async function handleStreamJsonRequest(
 ): Promise<void> {
   const cliInput = openaiToCli(body);
   const bridgeTools = shouldBridgeExternalTools(body);
+  const callerKey = extractCallerKey(req);
 
   let subprocess: Awaited<ReturnType<typeof acquirePreInit>>;
   let userText = cliInput.prompt;
@@ -737,6 +771,7 @@ async function handleStreamJsonRequest(
       jsonSchema: cliInput.jsonSchema,
       maxTurns: cliInput.maxTurns,
       sessionPolicy: sessionOptions.sticky.policy,
+      callerKey,
     });
     subprocess = sticky.subprocess;
     userText = sticky.userText;
@@ -753,12 +788,12 @@ async function handleStreamJsonRequest(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey);
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
   } else {
-    const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents, bare: cliInput.bare, disableSlashCommands: cliInput.disableSlashCommands, jsonSchema: cliInput.jsonSchema, maxTurns: cliInput.maxTurns });
+    const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents, bare: cliInput.bare, disableSlashCommands: cliInput.disableSlashCommands, jsonSchema: cliInput.jsonSchema, maxTurns: cliInput.maxTurns, callerKey });
     subprocess = acquired.subprocess;
     tb.setSessionWarmHit(acquired.isWarm);
     const lastMessage = body.messages[body.messages.length - 1];
@@ -1236,12 +1271,18 @@ export async function handleResponses(
           sendStickyBusy(res, (err as Error).message === "sticky_session_capacity_busy" ? "Sticky session pool is at capacity and all sessions are busy" : "Sticky session is busy");
           return;
         }
+        if (isColdSpawnRateLimitedError(err)) {
+          tb.setError("cold_spawn_rate_limited", err.message);
+          tb.commit();
+          sendColdSpawnLimited(res, err.retryAfterSec);
+          return;
+        }
         throw err;
       }
     } else if (stream) {
       await handleResponsesStreaming(req, res, chatReq, requestId, body.model, tb);
     } else {
-      await handleResponsesNonStreaming(res, chatReq, requestId, tb);
+      await handleResponsesNonStreaming(req, res, chatReq, requestId, tb);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -1257,6 +1298,8 @@ export async function handleResponses(
             code: error.code,
           },
         });
+      } else if (isColdSpawnRateLimitedError(error)) {
+        sendColdSpawnLimited(res, error.retryAfterSec);
       } else {
         res.status(500).json({
           error: { message, type: "server_error", code: null },
@@ -1272,7 +1315,7 @@ export async function handleResponses(
  * transport but reshapes output into Responses envelopes/events.
  */
 async function handleResponsesStreamJson(
-  _req: Request,
+  req: Request,
   res: Response,
   chatReq: OpenAIChatRequest,
   requestId: string,
@@ -1284,6 +1327,7 @@ async function handleResponsesStreamJson(
   const model = extractModel(chatReq.model);
   const cliInput = openaiToCli(chatReq);
   const bridgeTools = shouldBridgeExternalTools(chatReq);
+  const callerKey = extractCallerKey(req);
 
   let subprocess: Awaited<ReturnType<typeof acquirePreInit>>;
   let userText = cliInput.prompt;
@@ -1314,6 +1358,7 @@ async function handleResponsesStreamJson(
       jsonSchema: cliInput.jsonSchema,
       maxTurns: cliInput.maxTurns,
       sessionPolicy: sessionOptions.sticky.policy,
+      callerKey,
     });
     subprocess = sticky.subprocess;
     userText = sticky.userText;
@@ -1330,12 +1375,12 @@ async function handleResponsesStreamJson(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey);
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
   } else {
-    const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents, bare: cliInput.bare, disableSlashCommands: cliInput.disableSlashCommands, jsonSchema: cliInput.jsonSchema, maxTurns: cliInput.maxTurns });
+    const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents, bare: cliInput.bare, disableSlashCommands: cliInput.disableSlashCommands, jsonSchema: cliInput.jsonSchema, maxTurns: cliInput.maxTurns, callerKey });
     subprocess = acquired.subprocess;
     tb.setSessionWarmHit(acquired.isWarm);
     const lastMessage = chatReq.messages[chatReq.messages.length - 1];
@@ -1456,13 +1501,14 @@ async function handleResponsesStreamJson(
  * Internally delegates to the --print path and converts the result.
  */
 async function handleResponsesNonStreaming(
+  req: Request,
   res: Response,
   chatReq: OpenAIChatRequest,
   requestId: string,
   tb: TraceBuilder,
 ): Promise<void> {
   const cliInput = openaiToCli(chatReq);
-  const subprocess = await acquireSubprocess(cliInput.model, toAcquireOptions(cliInput));
+  const subprocess = await acquireSubprocess(cliInput.model, { ...toAcquireOptions(cliInput), callerKey: extractCallerKey(req) });
 
   return new Promise((resolve) => {
     let finalResult: ClaudeCliResult | null = null;
@@ -1537,7 +1583,7 @@ async function handleResponsesStreaming(
   tb: TraceBuilder,
 ): Promise<void> {
   const cliInput = openaiToCli(chatReq);
-  const subprocess = await acquireSubprocess(cliInput.model, toAcquireOptions(cliInput));
+  const subprocess = await acquireSubprocess(cliInput.model, { ...toAcquireOptions(cliInput), callerKey: extractCallerKey(req) });
   const responseId = `resp_${requestId}`;
   const msgId = `msg_${uuidv4().replace(/-/g, "").slice(0, 12)}`;
 

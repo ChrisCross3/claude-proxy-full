@@ -28,6 +28,7 @@ import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { acquirePreInit } from "./init-pool.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import type { OpenAIChatMessage, OpenAIMessageContent } from "../types/openai.js";
+import { consumeColdSpawnToken, ColdSpawnRateLimitedError } from "../server/middleware/cold-spawn-limit.js";
 
 // Pool TTL is the longer of CLAUDE_PROXY_POOL_TTL_MS (default 600_000 = 10
 // min, per the operator's preference) and our internal floor of 6 min (~1 min
@@ -104,6 +105,8 @@ interface AcquireOptions {
   jsonSchema?: Record<string, unknown>;
   /** Max turns cap; not part of the fingerprint (per-call enforcement). */
   maxTurns?: number;
+  /** Caller key for cold-spawn rate-limit accounting. Optional; warm hits never consume. */
+  callerKey?: string;
 }
 
 function disallowedToolsKey(disallowedTools: string[] = []): string {
@@ -248,6 +251,10 @@ export async function acquireSession(
     slots.delete(priorKey);
   }
 
+  if (options.callerKey) {
+    const limit = consumeColdSpawnToken(options.callerKey);
+    if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
+  }
   poolCounters.coldSpawns++;
   return cold(model, messages, postTurnKey, options);
 }
