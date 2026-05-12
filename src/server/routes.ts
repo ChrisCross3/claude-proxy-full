@@ -52,6 +52,7 @@ import {
   buildStreamDoneEvents,
 } from "../adapter/responses.js";
 import { classifyError, isStreamLayerFault, type ProtocolErrorClass } from "../errors.js";
+import { classifyTurnError } from "./turn-error-classifier.js";
 import { createTraceBuilder, type TraceBuilder } from "../trace/builder.js";
 import { traceStore } from "../trace/store.js";
 import { detectOverlappingTools, isMcpInjectionEnabled, mcpGovernanceSummary } from "../mcp/governance.js";
@@ -1032,13 +1033,14 @@ async function handleStreamJsonRequest(
     // Re-pool or retain the subprocess for the next turn according to session mode.
     releaseSuccess(assistantText);
   } catch (err) {
+    const cls = classifyTurnError({ watchdogFired, clientClosed });
     // If the watchdog already fired and handled cleanup, skip duplicate work.
-    if (watchdogFired) return;
+    if (cls === "skip") return;
     // If the client already closed the connection, the close handler has
     // already released the subprocess with reason="client_disconnect" and
     // the error here is the resulting submitTurn rejection — do not
     // reclassify it as a turn_error and do not double-release.
-    if (clientClosed) {
+    if (cls === "client_disconnect") {
       done = true;
       tb.setError("client_disconnect", err instanceof Error ? err.message : "client disconnected");
       tb.commit();
@@ -1351,6 +1353,7 @@ async function handleResponsesStreamJson(
   let assistantText = "";
   let lastModel = requestModel;
   let done = false;
+  let clientClosed = false;
 
   if (stream) {
     res.setHeader("Content-Type", "text/event-stream");
@@ -1384,7 +1387,10 @@ async function handleResponsesStreamJson(
   subprocess.on("assistant", onAssistant);
 
   res.on("close", () => {
-    if (!done) releaseDiscard("client_disconnect");
+    if (!done) {
+      clientClosed = true;
+      releaseDiscard("client_disconnect");
+    }
   });
 
   try {
@@ -1418,6 +1424,16 @@ async function handleResponsesStreamJson(
       res.json(chatResponseToResponses(chatResponse, requestId));
     }
   } catch (error) {
+    const cls = classifyTurnError({ watchdogFired: false, clientClosed });
+    if (cls === "client_disconnect") {
+      // Client already closed; the close handler released the subprocess with
+      // reason="client_disconnect". The error here is the resulting submitTurn
+      // rejection — do not reclassify as turn_error and do not double-release.
+      done = true;
+      tb.setError("client_disconnect", error instanceof Error ? error.message : "client disconnected");
+      tb.commit();
+      return;
+    }
     done = true;
     releaseDiscard("turn_error");
     const message = error instanceof Error ? error.message : "Unknown error";
