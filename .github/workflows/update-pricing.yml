@@ -1,0 +1,54 @@
+name: Pricing Refresh
+
+# Weekly auto-refresh of the Anthropic pricing book embedded in
+# src/server/pricing.ts. Opens a PR with the diff for human review.
+
+on:
+  schedule:
+    # Monday 06:00 UTC — early-week so any breaking diff lands before traffic peaks.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    name: Refresh Anthropic pricing and open PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run pricing updater
+        run: node scripts/update-pricing.mjs
+
+      - name: Open PR with refreshed pricing
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/pricing-refresh
+          base: ${{ github.ref_name }}
+          commit-message: 'chore(pricing): weekly auto-refresh'
+          title: 'chore(pricing): weekly auto-refresh'
+          body: |
+            Automated weekly pricing refresh from Anthropic's published rates.
+
+            Review the diff for changes in input/output/cache rates and confirm
+            no rows were silently dropped or renamed before merging.
+
+            See `scripts/update-pricing.mjs` for the source and parsing logic.
+          labels: |
+            pricing
+            automated
+          delete-branch: true
