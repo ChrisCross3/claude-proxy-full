@@ -77,8 +77,8 @@ export function getLastMcpDecisions(): TraceMcpDecision[] {
  * The server set is filtered through MCP governance policy
  * (CLAUDE_PROXY_MCP_ALLOW / CLAUDE_PROXY_MCP_DENY) before injection.
  */
-function buildOptionAMcpServers(): Record<string, ResolvedMcpServer> {
-  const raw: Record<string, ResolvedMcpServer> = { ...loadOpenclawMcpServers() };
+async function buildOptionAMcpServers(): Promise<Record<string, ResolvedMcpServer>> {
+  const raw: Record<string, ResolvedMcpServer> = { ...(await loadOpenclawMcpServers()) };
 
   // Legacy/fallback: env-var-driven n8n, only if not already set from openclaw.json.
   if (!raw.n8n && process.env.CLAUDE_PROXY_N8N_API_URL && process.env.CLAUDE_PROXY_N8N_API_KEY) {
@@ -299,7 +299,7 @@ export class StreamJsonSubprocess extends EventEmitter {
     // README "Tools translation modes".
     if (process.env.CLAUDE_PROXY_TOOLS_TRANSLATION === "1") {
       console.error("[MCP] WARNING: CLAUDE_PROXY_TOOLS_TRANSLATION=1 — inner Claude CLI will execute MCP tools directly. OpenClaw audit/approval is bypassed for injected tools.");
-      const mcpServers = buildOptionAMcpServers();
+      const mcpServers = await buildOptionAMcpServers();
       this.mcpDecisions = [...lastMcpDecisions];
       if (Object.keys(mcpServers).length > 0) {
         args.push("--mcp-config", JSON.stringify({ mcpServers }));
