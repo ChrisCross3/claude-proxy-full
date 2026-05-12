@@ -87,8 +87,7 @@ function classifyAndRecordError(err: unknown): ProtocolErrorClass {
 
 /**
  * Map CliInput onto the subset of fields acquireSubprocess understands.
- * Ensures all CLI flag fields propagate into print-mode spawns (warm-pool
- * path otherwise drops them — see Fix #1 in feat/model-registry).
+ * Ensures all CLI flag fields propagate into the print-mode spawn.
  */
 function toAcquireOptions(cli: ReturnType<typeof openaiToCli>): AcquireOptions {
   return {
