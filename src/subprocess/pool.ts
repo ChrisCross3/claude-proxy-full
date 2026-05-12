@@ -1,16 +1,12 @@
 /**
- * Subprocess Warm Pool
+ * Print-mode subprocess acquisition.
  *
- * INTENT: Pre-spawn one idle `claude` per recently-used model so the next
- * request skips the ~1.5s claude bootstrap.
+ * One cold spawn per request — `claude --print` reads its prompt from stdin
+ * and exits, so there's nothing to keep warm here. Streaming/sticky callers
+ * use `init-pool.ts` + `session-pool.ts` instead.
  *
- * STATUS: Disabled by default. claude in --print mode has a hard-coded 3s
- * stdin timeout — if no prompt arrives in 3s, it exits with
- * "Error: Input must be provided either through stdin or as a prompt
- * argument when using --print". Real warm-pool support needs
- * --input-format stream-json (persistent NDJSON mode), which is a deeper
- * refactor. The plumbing here is kept so that future work can flip
- * CLAUDE_PROXY_WARM_POOL=1 once stream-json is wired up.
+ * The optional cold-spawn rate-limit (per caller key) is enforced before the
+ * spawn; see `server/middleware/cold-spawn-limit.ts`.
  */
 
 import { ClaudeSubprocess } from "./manager.js";
@@ -19,115 +15,19 @@ import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { consumeColdSpawnToken, ColdSpawnRateLimitedError } from "../server/middleware/cold-spawn-limit.js";
 
 export type AcquireOptions = Omit<SubprocessOptions, "model" | "sessionId" | "cwd" | "timeout"> & {
-  /** Caller key for cold-spawn rate-limit accounting. Optional; warm hits never consume. */
+  /** Caller key for cold-spawn rate-limit accounting. */
   callerKey?: string;
 };
 
-const MAX_IDLE_MS = 2500; // <3s claude --print stdin deadline
-const ENABLED = process.env.CLAUDE_PROXY_WARM_POOL === "1";
-
-interface PreparedSlot {
-  subprocess: ClaudeSubprocess;
-  preparedAt: number;
-}
-
-const warmSlots: Map<ClaudeModel, PreparedSlot> = new Map();
-const refilling: Set<ClaudeModel> = new Set();
-
-/**
- * Get a subprocess ready to receive a prompt for `model`. If a warm one is
- * available, pop it; otherwise spawn fresh. Either way, kick off a background
- * refill so the next request also gets a warm subprocess.
- */
 export async function acquireSubprocess(
   model: ClaudeModel,
   options: AcquireOptions = {},
 ): Promise<ClaudeSubprocess> {
-  const needsDedicated =
-    (options.disallowedTools && options.disallowedTools.length > 0)
-    || !!options.effort
-    || options.thinking !== undefined
-    || !!options.debug
-    || options.maxBudgetUsd !== undefined
-    || !!options.permissionMode
-    || !!options.systemPrompt
-    || !!options.appendSystemPrompt
-    || !!options.agent
-    || !!options.agents
-    || !!options.bare
-    || !!options.disableSlashCommands
-    || !!options.jsonSchema
-    || options.maxTurns !== undefined;
-
-  if (!ENABLED || needsDedicated) {
-    if (options.callerKey) {
-      const limit = consumeColdSpawnToken(options.callerKey);
-      if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
-    }
-    const sub = new ClaudeSubprocess();
-    await sub.prepare({ model, ...options });
-    return sub;
+  if (options.callerKey) {
+    const limit = consumeColdSpawnToken(options.callerKey);
+    if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
   }
-
-  const slot = warmSlots.get(model);
-  warmSlots.delete(model);
-
-  let result: ClaudeSubprocess;
-  if (slot && slot.subprocess.isHealthy() && Date.now() - slot.preparedAt < MAX_IDLE_MS) {
-    console.error(`[Pool] Warm hit for ${model} (age ${Date.now() - slot.preparedAt}ms)`);
-    result = slot.subprocess;
-  } else {
-    if (slot) {
-      const ageMs = Date.now() - slot.preparedAt;
-      const healthDetails = slot.subprocess.healthDetails();
-      console.error(
-        `[Pool] Stale slot for ${model}: age=${ageMs}ms ${JSON.stringify(healthDetails)}`,
-      );
-      slot.subprocess.kill();
-    }
-    if (options.callerKey) {
-      const limit = consumeColdSpawnToken(options.callerKey);
-      if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
-    }
-    const sub = new ClaudeSubprocess();
-    await sub.prepare({ model });
-    result = sub;
-  }
-
-  // Refill in the background — don't await, the request shouldn't wait for it.
-  refillSlot(model).catch((err) => {
-    console.error(`[Pool] Refill failed for ${model}:`, err.message);
-  });
-
-  return result;
+  const sub = new ClaudeSubprocess();
+  await sub.prepare({ model, ...options });
+  return sub;
 }
-
-async function refillSlot(model: ClaudeModel): Promise<void> {
-  if (refilling.has(model) || warmSlots.has(model)) return;
-  refilling.add(model);
-  try {
-    const sub = new ClaudeSubprocess();
-    await sub.prepare({ model });
-    if (warmSlots.has(model)) {
-      // Race: someone else filled it first. Discard ours.
-      sub.kill();
-      return;
-    }
-    warmSlots.set(model, { subprocess: sub, preparedAt: Date.now() });
-    console.error(`[Pool] Refilled warm slot for ${model}`);
-  } finally {
-    refilling.delete(model);
-  }
-}
-
-/** Drain pool on shutdown. */
-export function drainPool(): void {
-  for (const [model, slot] of warmSlots) {
-    slot.subprocess.kill();
-    console.error(`[Pool] Drained ${model}`);
-  }
-  warmSlots.clear();
-}
-
-process.on("SIGTERM", drainPool);
-process.on("SIGINT", drainPool);
