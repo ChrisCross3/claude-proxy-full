@@ -1,4 +1,11 @@
-# Claude Code CLI Provider - Technical Design
+# DESIGN.md — Historical (2025-09 original sketch)
+> **STATUS: HISTORICAL.** This is the initial Clawdbot plugin design from
+> 2025-09. The shipping code dropped the in-process plugin shape in favor of a
+> standalone HTTP proxy; see ARCHITECTURE.md for current layout. Concepts
+> kept (stream-json, OpenAI<->CLI adapters, session mapping) match today's
+> code in spirit but not in detail (no Express on 3456, no
+> `--no-session-persistence`, no `~/.claude-code-cli-sessions.json`). Kept for
+> archaeology.
 
 ## Overview
 

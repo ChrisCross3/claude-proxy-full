@@ -6,7 +6,7 @@
  * and `name{label="value"} number\n` lines — straightforward.
  *
  * Cardinality discipline: we never label by request id, prompt hash,
- * full model id from request (only canonical ids from MODEL_MAP), or
+ * full model id from request (only canonical ids from models/registry), or
  * user-controlled strings. Reasons for fallback are from a fixed
  * allowlist defined in routes.ts classifyFallbackReason().
  *
