@@ -52,7 +52,13 @@ export async function supportsClaudeFlag(flag: string, forceRefresh = false): Pr
 export async function pushClaudeFlagIfSupported(
   args: string[],
   flag: string,
-  options: { requested?: boolean; value?: string; warn?: boolean } = {},
+  options: {
+    requested?: boolean;
+    value?: string;
+    warn?: boolean;
+    strict?: boolean;
+    requestedValueLabel?: string;
+  } = {},
 ): Promise<boolean> {
   if (options.requested === false) return false;
   const supported = await supportsClaudeFlag(flag);
@@ -60,6 +66,13 @@ export async function pushClaudeFlagIfSupported(
     args.push(flag);
     if (options.value !== undefined) args.push(options.value);
     return true;
+  }
+  if (options.strict) {
+    const label = options.requestedValueLabel ?? options.value ?? "(set)";
+    throw new Error(
+      `Claude CLI does not support ${flag} (capability check via 'claude --help'). ` +
+      `${flag}='${label}' was requested; either run 'claude update' or omit it.`,
+    );
   }
   if (options.warn !== false) {
     console.warn(`[Claude CLI] Skipping unsupported flag ${flag}. Current claude --help does not advertise it.`);
@@ -69,4 +82,8 @@ export async function pushClaudeFlagIfSupported(
 
 export function resetClaudeCliCapabilitiesForTests(): void {
   cachedCapabilities = null;
+}
+
+export function setClaudeCliCapabilitiesForTests(caps: ClaudeCliCapabilities): void {
+  cachedCapabilities = caps;
 }
