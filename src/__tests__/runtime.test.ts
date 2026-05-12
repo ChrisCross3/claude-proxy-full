@@ -11,11 +11,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Resolves to dist/__tests__/.. → dist/subprocess/runtime.js after build
-const RUNTIME_MODULE = path.resolve(__dirname, "..", "subprocess", "runtime.js");
+// Resolves to dist/__tests__/.. → dist/subprocess/runtime.js after build.
+// Must be a file:// URL so dynamic import() works on Windows worker threads
+// (Windows absolute paths like `C:\...` are rejected by the ESM loader).
+const RUNTIME_MODULE = pathToFileURL(
+  path.resolve(__dirname, "..", "subprocess", "runtime.js"),
+).href;
 
 interface ResolveResult {
   defaultMode: string;
