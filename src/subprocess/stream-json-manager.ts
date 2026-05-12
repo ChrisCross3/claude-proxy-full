@@ -42,6 +42,18 @@ import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 const INIT_TIMEOUT_MS = 30000;
 const TURN_TIMEOUT_MS = 900000;
 
+/** Hard cap on unflushed stdout buffer; prevents OOM on a pathological line. */
+export const STDOUT_BUFFER_HARD_CAP_BYTES = 50_000_000;
+
+/**
+ * Pure helper. Returns true if a buffer of `bufferLen` bytes exceeds the
+ * hard cap. Extracted so the cap policy is unit-testable without spawning
+ * a real subprocess.
+ */
+export function exceedsStdoutCap(bufferLen: number, capBytes = STDOUT_BUFFER_HARD_CAP_BYTES): boolean {
+  return bufferLen > capBytes;
+}
+
 /** MCP governance decisions from the last buildOptionAMcpServers() call. */
 let lastMcpDecisions: TraceMcpDecision[] = [];
 
@@ -290,6 +302,19 @@ export class StreamJsonSubprocess extends EventEmitter {
       this.process.stdout?.on("data", (chunk: Buffer) => {
         this.markProcessActivity();
         this.buffer += chunk.toString();
+        if (exceedsStdoutCap(this.buffer.length)) {
+          console.error(
+            `[StreamJson] stdout buffer exceeded hard cap ` +
+            `(${this.buffer.length} > ${STDOUT_BUFFER_HARD_CAP_BYTES}); ` +
+            `killing subprocess pid=${this.process?.pid}`,
+          );
+          this.buffer = "";
+          if (this.listenerCount("error") > 0) {
+            this.emit("error", new Error("ndjson_line_too_large"));
+          }
+          this.kill();
+          return;
+        }
         this.processBuffer();
       });
 
