@@ -62,7 +62,6 @@ These variables affect the persistent `stream-json` runtime.
 | `CLAUDE_PROXY_INIT_POOL` | enabled | Set `0` to disable the per-model init pool. |
 | `CLAUDE_PROXY_POOL_TTL_MS` | `600000` | Idle TTL for session-pool workers. Floored internally to avoid evicting during the prompt-cache window. |
 | `CLAUDE_PROXY_POOL_MAX` | `4` | Maximum live workers in the session pool. |
-| `CLAUDE_PROXY_WARM_POOL` | unset | Legacy warm-pool toggle used by older code paths. Prefer the default stream-json init/session pool. |
 | `CLAUDE_PROXY_UPSTREAM_SOFT_DEAD_MS` | code default | Soft-dead threshold for upstream silence detection. Usually leave unset. |
 | `CLAUDE_PROXY_DESCENDANT_GRACE_MS` | code default | Grace window for descendant/tool process handling. Usually leave unset. |
 
