@@ -132,12 +132,27 @@ function systemPromptKey(systemPrompt?: string, appendSystemPrompt?: string): st
   return h.digest("hex").slice(0, 16);
 }
 
+/**
+ * Deterministic JSON.stringify with object keys sorted at every level.
+ * Used so semantically-equal `agents` records (same keys, different insertion
+ * order) hash identically. Exported for unit-test visibility.
+ */
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map(stableStringify).join(",") + "]";
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.map(k => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+}
+
 function agentsKey(agent?: string, agents?: Record<string, unknown>): string {
   if (!agent && !agents) return "";
   const h = createHash("sha256");
   h.update(agent ?? "");
   h.update("\x1f");
-  h.update(agents ? JSON.stringify(agents) : "");
+  h.update(agents ? stableStringify(agents) : "");
   return h.digest("hex").slice(0, 16);
 }
 

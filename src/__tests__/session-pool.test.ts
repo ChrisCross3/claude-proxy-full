@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stableStringify } from "../subprocess/session-pool.js";
 
 /**
  * The pool stores (subprocess, key, lastUsedAt, fingerprint{model}). We
@@ -108,4 +109,32 @@ test("CLAUDE_PROXY_POOL_MAX env override is parsed", () => {
   assert.equal(parse(""), 4);
   assert.equal(parse("0"), 4);
   assert.equal(parse("-1"), 4);
+});
+
+test("stableStringify produces order-independent output", () => {
+  assert.equal(
+    stableStringify({ a: 1, b: 2 }),
+    stableStringify({ b: 2, a: 1 }),
+  );
+});
+
+test("stableStringify handles nested objects deterministically", () => {
+  assert.equal(
+    stableStringify({ x: { p: 1, q: 2 } }),
+    stableStringify({ x: { q: 2, p: 1 } }),
+  );
+});
+
+test("stableStringify preserves array order", () => {
+  assert.notEqual(
+    stableStringify([1, 2, 3]),
+    stableStringify([3, 2, 1]),
+  );
+});
+
+test("stableStringify differentiates value changes", () => {
+  assert.notEqual(
+    stableStringify({ a: 1 }),
+    stableStringify({ a: 2 }),
+  );
 });
