@@ -272,7 +272,26 @@ export async function handleChatCompletions(
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const traceId = `trc_${requestId}`;
   const body = req.body as OpenAIChatRequest;
-  normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
+  // Normalize OpenRouter-shaped requests up-front so the trace builder and
+  // model registry see the canonical model id. Wrapped in its own try/catch
+  // because it precedes the main try block: a thrown ModelValidationError
+  // (e.g. reasoning_invalid for nested/typed reasoning.effort) must surface
+  // as HTTP 400, not as an unhandled promise rejection that hangs the client.
+  try {
+    normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
+  } catch (err) {
+    if (err instanceof ModelValidationError) {
+      res.status(400).json({
+        error: {
+          message: err.message,
+          type: "invalid_request_error",
+          code: err.code,
+        },
+      });
+      return;
+    }
+    throw err;
+  }
   const stream = body.stream === true;
   const reqStart = Date.now();
   let usedRuntime: "stream-json" | "print" = "stream-json";
@@ -1095,7 +1114,25 @@ export async function handleResponses(
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const traceId = `trc_${requestId}`;
   const body = req.body as ResponsesRequest;
-  normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
+  // Normalize OpenRouter-shaped requests up-front; wrapped in its own
+  // try/catch because it precedes the main try block (see notes in
+  // handleChatCompletions). A thrown ModelValidationError must reach the
+  // client as HTTP 400 rather than escaping as an unhandled rejection.
+  try {
+    normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
+  } catch (err) {
+    if (err instanceof ModelValidationError) {
+      res.status(400).json({
+        error: {
+          message: err.message,
+          type: "invalid_request_error",
+          code: err.code,
+        },
+      });
+      return;
+    }
+    throw err;
+  }
   const stream = body.stream === true;
   const reqStart = Date.now();
   let usedRuntime: "stream-json" | "print" = "print";
@@ -1184,9 +1221,19 @@ export async function handleResponses(
     tb.setError(classifyError(error), message);
     tb.commit();
     if (!res.headersSent) {
-      res.status(500).json({
-        error: { message, type: "server_error", code: null },
-      });
+      if (error instanceof ModelValidationError) {
+        res.status(400).json({
+          error: {
+            message,
+            type: "invalid_request_error",
+            code: error.code,
+          },
+        });
+      } else {
+        res.status(500).json({
+          error: { message, type: "server_error", code: null },
+        });
+      }
     }
   }
 }
