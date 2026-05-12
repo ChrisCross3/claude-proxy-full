@@ -9,6 +9,7 @@ import { createServer, Server } from "http";
 import { handleChatCompletions, handleModels, handleHealth, handleHealthDeep, handlePricing, handleResponses, handleTraceGet, handleTraceList } from "./routes.js";
 import { handleMetrics } from "./metrics.js";
 import { corsMiddleware } from "./middleware/cors.js";
+import { authMiddleware } from "./middleware/auth.js";
 
 export interface ServerConfig {
   port: number;
@@ -37,6 +38,9 @@ function createApp(): Express {
   // CORS (opt-in whitelist via CLAUDE_PROXY_ALLOWED_ORIGINS — default: no headers).
   // The middleware handles OPTIONS preflights itself, so no separate app.options.
   app.use(corsMiddleware());
+
+  // Bearer-Token auth (opt-in via CLAUDE_PROXY_API_KEY / _KEYS — default: no-op).
+  app.use(authMiddleware());
 
   // Routes — register both /v1/* and /* paths so clients that omit the
   // /v1 prefix (e.g. OpenCLAW's openai-completions provider) still work.
