@@ -6,6 +6,7 @@ import {
   isIdleExpired,
   isAbsoluteExpired,
   parseStickyTtlMs,
+  __hashAgentsForTests,
 } from "../subprocess/sticky-session-pool.js";
 
 test("disallowedToolsKey sorts tools for stable fingerprinting", () => {
@@ -64,4 +65,23 @@ test("absolute expiration can be disabled with zero", () => {
 test("parseStickyTtlMs converts seconds to milliseconds", () => {
   assert.equal(parseStickyTtlMs(60), 60_000);
   assert.equal(parseStickyTtlMs(86400), 86_400_000);
+});
+
+// Welle 4 Gruppe A — M1: align sticky-pool agents-hashing with session-pool.
+// Two agents objects with the same keys in different insertion order must
+// produce the same sticky fingerprint, mirroring the session-pool behaviour.
+test("hashAgents is insertion-order-independent (stableStringify alignment)", () => {
+  const agentsA = { researcher: { role: "r" }, planner: { role: "p" } };
+  const agentsB = { planner: { role: "p" }, researcher: { role: "r" } };
+  assert.equal(
+    __hashAgentsForTests("ad-hoc", agentsA),
+    __hashAgentsForTests("ad-hoc", agentsB),
+    "sticky agents hash must be order-independent (drift with session-pool fixed)",
+  );
+  // Semantically different agents map → must still differ.
+  const agentsC = { planner: { role: "p" }, researcher: { role: "different" } };
+  assert.notEqual(
+    __hashAgentsForTests("ad-hoc", agentsA),
+    __hashAgentsForTests("ad-hoc", agentsC),
+  );
 });

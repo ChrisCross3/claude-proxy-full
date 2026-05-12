@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { stableStringify } from "./fingerprint.js";
 import { StreamJsonSubprocess } from "./stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
@@ -163,12 +164,19 @@ function hashSystemPrompts(systemPrompt?: string, appendSystemPrompt?: string): 
   return h.digest("hex").slice(0, 16);
 }
 
+export function __hashAgentsForTests(agent?: string, agents?: Record<string, unknown>): string {
+  return hashAgents(agent, agents);
+}
+
 function hashAgents(agent?: string, agents?: Record<string, unknown>): string {
   if (!agent && !agents) return "";
   const h = createHash("sha256");
   h.update(agent ?? "");
   h.update("\x1f");
-  h.update(agents ? JSON.stringify(agents) : "");
+  // stableStringify (vs JSON.stringify) keeps the sticky fingerprint
+  // insertion-order-independent and aligned with the session pool — same
+  // agents map must hash identically across both pools.
+  h.update(agents ? stableStringify(agents) : "");
   return h.digest("hex").slice(0, 16);
 }
 
