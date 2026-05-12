@@ -199,8 +199,17 @@ export const fallbackCounters = {
  * /metrics to grow unbounded labels from random model strings.
  */
 // Canonical model IDs accepted as Prometheus labels — derived from the registry.
+// We also accept dated/full-id aliases (e.g. `claude-haiku-4-5-20251001`) as labels
+// so callers using either canonical or dated form land on a stable bounded label.
+// Short aliases like "haiku" or provider-prefixed forms are excluded so cardinality
+// stays bounded and known-shape.
 // Unknown labels collapse to "other" to keep /metrics cardinality bounded.
-const KNOWN_MODEL_LABELS = new Set<string>(MODELS.map((m) => m.id));
+const KNOWN_MODEL_LABELS = new Set<string>([
+  ...MODELS.map((m) => m.id),
+  ...MODELS.flatMap((m) =>
+    m.aliases.filter((a) => /^claude-[a-z]+-\d/.test(a) && !a.includes("/")),
+  ),
+]);
 function canonicalizeModelLabel(model: string | undefined): string {
   if (!model) return "unknown";
   // Strip provider prefix (claude-proxy/ or claude-code-cli/).

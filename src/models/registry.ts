@@ -79,7 +79,10 @@ export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
     ],
   },
   {
-    id: 'claude-haiku-4-5-20251001',
+    // Canonical ID is the version-major form (no date suffix) — keeps
+    // downstream telemetry, /metrics labels, and pricing keys stable when
+    // Anthropic rolls a minor refresh under the same major version.
+    id: 'claude-haiku-4-5',
     name: 'Claude Haiku 4.5',
     contextWindow: 200_000,
     maxOutputTokens: 8192,
@@ -88,10 +91,11 @@ export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
     oneMillionContextVariant: false,
     aliases: [
       'haiku',
-      'claude-haiku-4-5',
+      'claude-haiku-4-5-20251001',
       'claude-proxy/claude-haiku-4-5',
       'claude-proxy/claude-haiku-4-5-20251001',
       'claude-code-cli/claude-haiku-4-5',
+      'claude-code-cli/claude-haiku-4-5-20251001',
     ],
   },
 ] as const;

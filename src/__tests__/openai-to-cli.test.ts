@@ -33,7 +33,9 @@ test("extractModel resolves canonical IDs", () => {
 test("extractModel resolves short aliases to canonical IDs", () => {
   assert.equal(extractModel("opus"), "claude-opus-4-7");
   assert.equal(extractModel("sonnet"), "claude-sonnet-4-6");
-  assert.equal(extractModel("haiku"), "claude-haiku-4-5-20251001");
+  assert.equal(extractModel("haiku"), "claude-haiku-4-5");
+  // Dated form resolves to the same canonical id.
+  assert.equal(extractModel("claude-haiku-4-5-20251001"), "claude-haiku-4-5");
 });
 
 test("extractModel strips claude-code-cli provider prefix", () => {
@@ -177,7 +179,7 @@ test("openaiToCli maps request model through the strict registry", () => {
     model: "haiku",
     messages: [{ role: "user", content: "hi" }],
   };
-  assert.equal(openaiToCli(req).model, "claude-haiku-4-5-20251001");
+  assert.equal(openaiToCli(req).model, "claude-haiku-4-5");
 });
 
 test("openaiToCli passes a valid reasoning_effort through as effort", () => {
