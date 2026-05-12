@@ -18,6 +18,8 @@
  * in-place und ist idempotent.
  */
 
+import { ModelValidationError } from './openai-to-cli.js';
+
 type AnyRecord = Record<string, unknown>;
 
 const OPENROUTER_MODEL_PREFIXES: readonly string[] = [
@@ -64,6 +66,19 @@ export function normalizeOpenRouterRequest(req: AnyRecord): void {
 
   const effortRaw = reasoning.effort;
   const enabled = reasoning.enabled;
+
+  // Strict-throw on nested/typed shapes: OpenAI-Responses-style
+  // `{ effort: { level: "high" } }` would be silently dropped by the
+  // string-check below, leaving the caller's high-effort intent
+  // un-honored. Refuse it explicitly. null is treated as "absent".
+  if (effortRaw !== undefined && effortRaw !== null && typeof effortRaw !== 'string') {
+    throw new ModelValidationError(
+      `reasoning.effort must be a string; got ${typeof effortRaw} ` +
+      `(nested OpenAI-Responses shapes like { level: "high" } are not supported — ` +
+      `pass reasoning.effort as a top-level string).`,
+      'reasoning_invalid',
+    );
+  }
 
   // enabled=false or effort='none' -> thinking off (unless caller set thinking)
   const disabled =

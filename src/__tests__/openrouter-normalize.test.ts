@@ -100,3 +100,33 @@ test('normalize: non-string model passes through', () => {
   normalizeOpenRouterRequest(req);
   assert.equal(req.model, 42);
 });
+
+test('normalizeOpenRouterRequest throws on nested reasoning.effort', () => {
+  assert.throws(
+    () => normalizeOpenRouterRequest({
+      model: 'anthropic/claude-opus-4-7',
+      reasoning: { effort: { level: 'high' } },
+    } as any),
+    { code: 'reasoning_invalid' },
+  );
+});
+
+test('normalizeOpenRouterRequest throws on numeric reasoning.effort', () => {
+  assert.throws(
+    () => normalizeOpenRouterRequest({
+      model: 'anthropic/claude-opus-4-7',
+      reasoning: { effort: 7 },
+    } as any),
+    { code: 'reasoning_invalid' },
+  );
+});
+
+test('normalizeOpenRouterRequest tolerates null reasoning.effort (treated as absent)', () => {
+  const req: any = {
+    model: 'anthropic/claude-opus-4-7',
+    reasoning: { effort: null, enabled: true },
+  };
+  assert.doesNotThrow(() => normalizeOpenRouterRequest(req));
+  // effort should not be set (null wasn't lifted)
+  assert.equal(req.reasoning_effort, undefined);
+});
