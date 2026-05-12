@@ -19,7 +19,7 @@
  * the returned values. Unresolved refs are dropped with a logged warning.
  */
 
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, statSync } from "fs";
 import { execSync } from "child_process";
 import { homedir } from "os";
 import { resolve } from "path";
@@ -77,6 +77,46 @@ function defaultConfigPath(): string {
     || resolve(homedir(), ".openclaw", "openclaw.json");
 }
 
+type PermsMode = "warn" | "strict" | "off";
+
+function permsMode(): PermsMode {
+  const raw = (process.env.CLAUDE_PROXY_OPENCLAW_STRICT_PERMS || "warn").trim().toLowerCase();
+  if (raw === "strict" || raw === "off") return raw;
+  return "warn";
+}
+
+/**
+ * Reject world/group-writable openclaw.json — it holds secret refs and
+ * resolver commands, so a writable file is a privilege-escalation path.
+ * Returns true if the load may continue, false if strict mode rejects it.
+ *
+ * On Windows (process.getuid undefined) this is a no-op: POSIX mode bits
+ * do not map cleanly onto NTFS ACLs and would produce false positives.
+ */
+function checkConfigPerms(path: string): boolean {
+  if (typeof (process as { getuid?: () => number }).getuid !== "function") {
+    return true; // Windows / no POSIX uid → skip
+  }
+  const mode = permsMode();
+  if (mode === "off") return true;
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(path);
+  } catch {
+    return true; // existsSync passed; race or perms error — let readFile fail explicitly
+  }
+  const insecure = (st.mode & 0o022) !== 0;
+  if (!insecure) return true;
+  const msg = `[openclaw-config] ${path} is group/world-writable (mode=0${(st.mode & 0o777).toString(8)}). `
+    + `This file holds secret references and resolver commands — chmod 600 is recommended.`;
+  if (mode === "strict") {
+    console.error(`${msg} CLAUDE_PROXY_OPENCLAW_STRICT_PERMS=strict — refusing to load.`);
+    return false;
+  }
+  console.error(`${msg} (set CLAUDE_PROXY_OPENCLAW_STRICT_PERMS=strict to refuse loads, or =off to silence.)`);
+  return true;
+}
+
 function callResolver(cmd: string, ids: string[]): Record<string, string> {
   try {
     const stdout = execSync(cmd, {
@@ -107,6 +147,11 @@ export function loadOpenclawMcpServers(): Record<string, ResolvedMcpServer> {
   const path = defaultConfigPath();
   if (!existsSync(path)) {
     console.error(`[openclaw-config] not found: ${path} — skipping openclaw-config import`);
+    cached = { servers: {}, loadedAt: Date.now() };
+    return cached.servers;
+  }
+
+  if (!checkConfigPerms(path)) {
     cached = { servers: {}, loadedAt: Date.now() };
     return cached.servers;
   }

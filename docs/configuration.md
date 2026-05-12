@@ -208,8 +208,19 @@ When enabled, the proxy registers selected MCP servers directly with the inner C
 | --- | --- | --- |
 | `CLAUDE_PROXY_TOOLS_TRANSLATION` | unset | Set `1` to enable direct MCP injection. |
 | `CLAUDE_PROXY_OPENCLAW_CONFIG` | `$HOME/.openclaw/openclaw.json` | Optional path to an OpenClaw config file whose `mcp.servers` can be imported. |
+| `CLAUDE_PROXY_OPENCLAW_STRICT_PERMS` | `warn` | File-mode policy for `openclaw.json`. `warn` (default) logs if the file is group/world-writable but still loads; `strict` refuses to load and returns an empty server map; `off` disables the check. POSIX-only (no-op on Windows). |
 | `CLAUDE_PROXY_MCP_ALLOW` | unset | Comma-separated allowlist of MCP server names. If set, only these servers are injected. |
 | `CLAUDE_PROXY_MCP_DENY` | unset | Comma-separated denylist of MCP server names. Deny wins over allow. |
+
+`openclaw.json` holds secret references and resolver commands. On POSIX
+hosts we recommend:
+
+```bash
+chmod 600 ~/.openclaw/openclaw.json
+```
+
+For shared/hardened deployments set `CLAUDE_PROXY_OPENCLAW_STRICT_PERMS=strict`
+to refuse the load if the file is ever made group/world-writable.
 
 Example:
 
