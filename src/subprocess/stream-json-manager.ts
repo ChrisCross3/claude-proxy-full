@@ -427,12 +427,25 @@ export class StreamJsonSubprocess extends EventEmitter {
     };
 
     return new Promise<ClaudeCliResult>((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.off("result", onResult);
+        this.off("close", onClose);
         this.turnInFlight = false;
+        // A turn that timed out has left an unresponsive subprocess behind:
+        // result/close listeners are now detached, so any late events would
+        // be lost — and the next acquire would re-use a dead worker. Kill
+        // it eagerly. `kill()` is idempotent (no-op when isKilled is set).
+        try { this.kill(); } catch { /* swallow — process may already be dead */ }
         reject(new Error(`turn timed out after ${TURN_TIMEOUT_MS}ms`));
       }, TURN_TIMEOUT_MS);
 
       const onResult = (result: ClaudeCliResult) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         this.turnInFlight = false;
         this.off("result", onResult);
@@ -440,6 +453,8 @@ export class StreamJsonSubprocess extends EventEmitter {
         resolve(result);
       };
       const onClose = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         this.turnInFlight = false;
         this.off("result", onResult);
@@ -453,6 +468,8 @@ export class StreamJsonSubprocess extends EventEmitter {
       try {
         this.writeLine(userMsg);
       } catch (err) {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         this.turnInFlight = false;
         this.off("result", onResult);
