@@ -138,3 +138,23 @@ test("stableStringify differentiates value changes", () => {
     stableStringify({ a: 2 }),
   );
 });
+
+test("stableStringify canonicalises undefined to 'null'", () => {
+  // Raw JSON.stringify(undefined) returns the string "undefined" which is
+  // invalid JSON; stableStringify must emit a valid JSON token instead so
+  // the output remains a parseable fragment in any composition position.
+  assert.equal(stableStringify(undefined), "null");
+});
+
+test("stableStringify treats undefined and null members consistently", () => {
+  // Both produce the same canonical token, which is fine for fingerprinting
+  // purposes (callers fold optional fields into the same equivalence class).
+  assert.equal(
+    stableStringify({ a: undefined }),
+    stableStringify({ a: null }),
+  );
+});
+
+test("stableStringify emits null tokens inside arrays for undefined entries", () => {
+  assert.equal(stableStringify([1, undefined, 2]), "[1,null,2]");
+});
