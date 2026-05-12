@@ -1,5 +1,5 @@
 /**
- * Tests for openclaw.json file-mode hardening (M4).
+ * Tests for openclaw.json file-mode hardening (M4) + async resolver (M2).
  *
  * POSIX-only: mode-bit checks are skipped on Windows where process.getuid
  * is undefined and NTFS ACLs don't map cleanly to chmod bits.
@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   loadOpenclawMcpServers,
   _clearCacheForTesting,
+  _setResolverForTesting,
 } from "../mcp/openclaw-config.js";
 
 const isWindows = process.platform === "win32";
@@ -24,7 +25,14 @@ function writeConfig(mode: number): string {
   return path;
 }
 
-function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
+function writeConfigAt(dir: string, payload: unknown, mode = 0o600): string {
+  const path = join(dir, "openclaw.json");
+  writeFileSync(path, JSON.stringify(payload), { mode });
+  if (!isWindows) chmodSync(path, mode);
+  return path;
+}
+
+async function withEnv(overrides: Record<string, string | undefined>, fn: () => void | Promise<void>): Promise<void> {
   const prev: Record<string, string | undefined> = {};
   for (const k of Object.keys(overrides)) prev[k] = process.env[k];
   try {
@@ -32,7 +40,7 @@ function withEnv(overrides: Record<string, string | undefined>, fn: () => void):
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
-    fn();
+    await fn();
   } finally {
     for (const [k, v] of Object.entries(prev)) {
       if (v === undefined) delete process.env[k];
@@ -41,20 +49,20 @@ function withEnv(overrides: Record<string, string | undefined>, fn: () => void):
   }
 }
 
-function captureStderr(fn: () => void): string {
+async function captureStderr(fn: () => void | Promise<void>): Promise<string> {
   const orig = console.error;
   let buf = "";
   console.error = (...args: unknown[]) => { buf += args.map(String).join(" ") + "\n"; };
-  try { fn(); } finally { console.error = orig; }
+  try { await fn(); } finally { console.error = orig; }
   return buf;
 }
 
-test("openclaw-config: strict mode rejects world-writable file", { skip: isWindows }, () => {
+test("openclaw-config: strict mode rejects world-writable file", { skip: isWindows }, async () => {
   const path = writeConfig(0o666);
-  withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "strict" }, () => {
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "strict" }, async () => {
     _clearCacheForTesting();
-    const stderr = captureStderr(() => {
-      const servers = loadOpenclawMcpServers();
+    const stderr = await captureStderr(async () => {
+      const servers = await loadOpenclawMcpServers();
       assert.equal(Object.keys(servers).length, 0, "strict must return empty map");
     });
     assert.match(stderr, /world-writable|group\/world-writable/);
@@ -62,12 +70,12 @@ test("openclaw-config: strict mode rejects world-writable file", { skip: isWindo
   });
 });
 
-test("openclaw-config: warn mode loads but logs warning for world-writable file", { skip: isWindows }, () => {
+test("openclaw-config: warn mode loads but logs warning for world-writable file", { skip: isWindows }, async () => {
   const path = writeConfig(0o666);
-  withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "warn" }, () => {
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "warn" }, async () => {
     _clearCacheForTesting();
-    const stderr = captureStderr(() => {
-      const servers = loadOpenclawMcpServers();
+    const stderr = await captureStderr(async () => {
+      const servers = await loadOpenclawMcpServers();
       assert.equal(Object.keys(servers).length, 1, "warn must still load");
       assert.ok(servers.greet, "greet server must be present");
     });
@@ -75,13 +83,13 @@ test("openclaw-config: warn mode loads but logs warning for world-writable file"
   });
 });
 
-test("openclaw-config: 0o600 loads silently in both warn and strict modes", { skip: isWindows }, () => {
+test("openclaw-config: 0o600 loads silently in both warn and strict modes", { skip: isWindows }, async () => {
   for (const mode of ["warn", "strict"] as const) {
     const path = writeConfig(0o600);
-    withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: mode }, () => {
+    await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: mode }, async () => {
       _clearCacheForTesting();
-      const stderr = captureStderr(() => {
-        const servers = loadOpenclawMcpServers();
+      const stderr = await captureStderr(async () => {
+        const servers = await loadOpenclawMcpServers();
         assert.equal(Object.keys(servers).length, 1, `${mode} must load 0o600 file`);
       });
       assert.doesNotMatch(stderr, /world-writable|group\/world-writable/, `${mode}: no warning for 0o600`);
@@ -89,14 +97,180 @@ test("openclaw-config: 0o600 loads silently in both warn and strict modes", { sk
   }
 });
 
-test("openclaw-config: off mode skips check entirely", { skip: isWindows }, () => {
+test("openclaw-config: off mode skips check entirely", { skip: isWindows }, async () => {
   const path = writeConfig(0o666);
-  withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off" }, () => {
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off" }, async () => {
     _clearCacheForTesting();
-    const stderr = captureStderr(() => {
-      const servers = loadOpenclawMcpServers();
+    const stderr = await captureStderr(async () => {
+      const servers = await loadOpenclawMcpServers();
       assert.equal(Object.keys(servers).length, 1);
     });
     assert.doesNotMatch(stderr, /world-writable/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2: async resolver, cache TTL, in-flight dedup, timeout
+// ---------------------------------------------------------------------------
+
+test("openclaw-config: async smoke — mock resolver substitutes secret value", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-proxy-openclaw-async-"));
+  const path = writeConfigAt(dir, {
+    mcp: {
+      servers: {
+        n8n: {
+          command: "n8n-mcp",
+          env: {
+            N8N_API_URL: "https://n8n.example/api",
+            N8N_API_KEY: { source: "exec", provider: "keychain", id: "n8n/apiKey" },
+          },
+        },
+      },
+    },
+    secrets: { providers: { keychain: { command: "irrelevant-stubbed-out" } } },
+  });
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off" }, async () => {
+    _clearCacheForTesting();
+    _setResolverForTesting(async (_cmd, ids) => {
+      const out: Record<string, string> = {};
+      for (const id of ids) out[id] = `resolved:${id}`;
+      return out;
+    });
+    try {
+      const servers = await loadOpenclawMcpServers();
+      assert.equal(servers.n8n?.env.N8N_API_KEY, "resolved:n8n/apiKey");
+      assert.equal(servers.n8n?.env.N8N_API_URL, "https://n8n.example/api");
+    } finally {
+      _setResolverForTesting(null);
+    }
+  });
+});
+
+test("openclaw-config: in-flight dedup — parallel loads share one resolver call", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-proxy-openclaw-dedup-"));
+  const path = writeConfigAt(dir, {
+    mcp: {
+      servers: {
+        n8n: {
+          command: "n8n-mcp",
+          env: { K: { source: "exec", provider: "keychain", id: "x" } },
+        },
+      },
+    },
+    secrets: { providers: { keychain: { command: "stub" } } },
+  });
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off" }, async () => {
+    _clearCacheForTesting();
+    let calls = 0;
+    _setResolverForTesting(async (_cmd, ids) => {
+      calls++;
+      // Yield to next microtask so other in-flight callers can observe.
+      await new Promise((r) => setTimeout(r, 20));
+      const out: Record<string, string> = {};
+      for (const id of ids) out[id] = "v";
+      return out;
+    });
+    try {
+      const [a, b, c] = await Promise.all([
+        loadOpenclawMcpServers(),
+        loadOpenclawMcpServers(),
+        loadOpenclawMcpServers(),
+      ]);
+      assert.equal(calls, 1, "resolver must be invoked exactly once for concurrent loads");
+      assert.equal(a, b, "same cached object reference");
+      assert.equal(b, c, "same cached object reference");
+    } finally {
+      _setResolverForTesting(null);
+    }
+  });
+});
+
+test("openclaw-config: TTL expiration causes re-read; within TTL stays cached", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-proxy-openclaw-ttl-"));
+  const path = writeConfigAt(dir, { mcp: { servers: { a: { command: "echo" } } } });
+  // Set TTL = 50ms so this test is fast and the > 60s requirement is
+  // semantically met (cache invalidates when wall-clock elapsed > TTL).
+  await withEnv({
+    CLAUDE_PROXY_OPENCLAW_CONFIG: path,
+    CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off",
+    CLAUDE_PROXY_OPENCLAW_RESOLVER_TTL_MS: "50",
+  }, async () => {
+    _clearCacheForTesting();
+    const first = await loadOpenclawMcpServers();
+    assert.ok(first.a, "first load returns server a");
+
+    // Swap the file. A second load inside the TTL must still see 'a'.
+    writeFileSync(path, JSON.stringify({ mcp: { servers: { b: { command: "echo" } } } }));
+    const cachedHit = await loadOpenclawMcpServers();
+    assert.ok(cachedHit.a, "within TTL the old cached map is returned");
+    assert.ok(!cachedHit.b, "within TTL the new file is not yet seen");
+
+    // Wait > TTL, load again — must now reflect the new file.
+    await new Promise((r) => setTimeout(r, 120));
+    const fresh = await loadOpenclawMcpServers();
+    assert.ok(fresh.b, "after TTL expiry the new file is read");
+    assert.ok(!fresh.a, "old server gone after re-read");
+  });
+});
+
+test("openclaw-config: resolver timeout — real spawn path SIGKILLs hanging resolver within 5s", { skip: isWindows }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-proxy-openclaw-timeout-"));
+  const path = writeConfigAt(dir, {
+    mcp: {
+      servers: {
+        n8n: {
+          command: "n8n-mcp",
+          env: { K: { source: "exec", provider: "keychain", id: "x" } },
+        },
+      },
+    },
+    // sleep 10 hangs longer than the 5s RESOLVER_TIMEOUT_MS — the spawn-
+    // path timer must SIGKILL it and resolve to {} so the load completes.
+    secrets: { providers: { keychain: { command: "sleep 10" } } },
+  });
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off" }, async () => {
+    _clearCacheForTesting();
+    // Suppress noisy timeout log line.
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      const t0 = Date.now();
+      const servers = await loadOpenclawMcpServers();
+      const elapsed = Date.now() - t0;
+      assert.ok(elapsed < 6000, `timeout must trigger inside ~5s (took ${elapsed}ms)`);
+      assert.ok(elapsed >= 4500, `should actually have waited for the timeout, not bailed early (took ${elapsed}ms)`);
+      assert.equal(servers.n8n?.env.K, undefined, "unresolved secret must be dropped after timeout");
+    } finally {
+      console.error = orig;
+    }
+  });
+});
+
+test("openclaw-config: resolver timeout — hanging promise via test override also yields empty map", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-proxy-openclaw-timeout-stub-"));
+  const path = writeConfigAt(dir, {
+    mcp: {
+      servers: {
+        n8n: {
+          command: "n8n-mcp",
+          env: { K: { source: "exec", provider: "keychain", id: "x" } },
+        },
+      },
+    },
+    secrets: { providers: { keychain: { command: "stub" } } },
+  });
+  await withEnv({ CLAUDE_PROXY_OPENCLAW_CONFIG: path, CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off" }, async () => {
+    _clearCacheForTesting();
+    // Stub resolver that takes "too long"; we race it with a watchdog.
+    _setResolverForTesting(() => new Promise(() => { /* never resolves */ }));
+    try {
+      const load = loadOpenclawMcpServers();
+      const watchdog = new Promise<"watchdog">((r) => setTimeout(() => r("watchdog"), 500));
+      const winner = await Promise.race([load.then(() => "load" as const), watchdog]);
+      assert.equal(winner, "watchdog", "override hangs by design; watchdog must win — this proves the dedup-promise is the same one we await");
+    } finally {
+      _setResolverForTesting(null);
+      _clearCacheForTesting();
+    }
   });
 });

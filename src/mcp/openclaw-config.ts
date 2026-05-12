@@ -20,7 +20,7 @@
  */
 
 import { readFileSync, existsSync, statSync } from "fs";
-import { execSync } from "child_process";
+import { spawn } from "child_process";
 import { homedir } from "os";
 import { resolve } from "path";
 
@@ -58,6 +58,17 @@ export interface SecretResolutionDecision {
 
 const RESOLVER_TIMEOUT_MS = 5000;
 
+/** Default TTL for the resolved-server cache. */
+const RESOLVER_CACHE_TTL_MS = 60_000;
+
+/** Effective TTL, re-read per call so env updates / tests take effect. */
+function resolverCacheTtlMs(): number {
+  const raw = process.env.CLAUDE_PROXY_OPENCLAW_RESOLVER_TTL_MS;
+  if (!raw) return RESOLVER_CACHE_TTL_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : RESOLVER_CACHE_TTL_MS;
+}
+
 /** Accumulated secret resolution decisions from last load — for trace/audit. */
 let lastSecretDecisions: SecretResolutionDecision[] = [];
 
@@ -67,6 +78,11 @@ export function getSecretResolutionDecisions(): SecretResolutionDecision[] {
 }
 
 let cached: { servers: Record<string, ResolvedMcpServer>; loadedAt: number } | null = null;
+let inflight: Promise<Record<string, ResolvedMcpServer>> | null = null;
+
+/** Resolver injection for tests; falls back to spawn-based callResolver. */
+type ResolverFn = (cmd: string, ids: string[]) => Promise<Record<string, string>>;
+let resolverOverride: ResolverFn | null = null;
 
 function isSecretRef(v: unknown): v is SecretRef {
   return v !== null && typeof v === "object" && !Array.isArray(v) && "source" in (v as Record<string, unknown>);
@@ -117,33 +133,106 @@ function checkConfigPerms(path: string): boolean {
   return true;
 }
 
-function callResolver(cmd: string, ids: string[]): Record<string, string> {
-  try {
-    const stdout = execSync(cmd, {
-      input: JSON.stringify({ ids }),
-      timeout: RESOLVER_TIMEOUT_MS,
-      encoding: "utf-8",
-    });
-    const parsed = JSON.parse(stdout) as { values?: Record<string, string>; errors?: Record<string, unknown> };
-    if (parsed.errors && Object.keys(parsed.errors).length > 0) {
-      console.error("[openclaw-config] resolver returned errors:", parsed.errors);
-    }
-    return parsed.values || {};
-  } catch (err) {
-    console.error("[openclaw-config] resolver invocation failed:", err instanceof Error ? err.message : err);
-    return {};
+/**
+ * Spawn the resolver, write {ids} to stdin, collect stdout, parse JSON.
+ * Async with a hard 5s timeout that SIGKILLs a hanging resolver. Failures
+ * (timeout, non-zero exit, parse error, spawn error) all degrade to an
+ * empty map with a stderr log — the proxy must not block on a flaky
+ * keychain.
+ */
+function callResolver(cmd: string, ids: string[]): Promise<Record<string, string>> {
+  if (resolverOverride) {
+    return resolverOverride(cmd, ids);
   }
+  return new Promise((resolveP) => {
+    let settled = false;
+    const finish = (values: Record<string, string>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveP(values);
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cmd, { shell: true });
+    } catch (err) {
+      console.error("[openclaw-config] resolver spawn failed:", err instanceof Error ? err.message : err);
+      resolveP({});
+      return;
+    }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout?.on("data", (c: Buffer) => stdoutChunks.push(c));
+    child.stderr?.on("data", (c: Buffer) => stderrChunks.push(c));
+
+    const timer = setTimeout(() => {
+      console.error(`[openclaw-config] resolver timed out after ${RESOLVER_TIMEOUT_MS}ms, killing`);
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+      finish({});
+    }, RESOLVER_TIMEOUT_MS);
+
+    child.on("error", (err) => {
+      console.error("[openclaw-config] resolver invocation failed:", err instanceof Error ? err.message : err);
+      finish({});
+    });
+
+    child.on("close", (code) => {
+      if (settled) return;
+      const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+      if (code !== 0) {
+        console.error(`[openclaw-config] resolver exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
+        finish({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout) as { values?: Record<string, string>; errors?: Record<string, unknown> };
+        if (parsed.errors && Object.keys(parsed.errors).length > 0) {
+          console.error("[openclaw-config] resolver returned errors:", parsed.errors);
+        }
+        finish(parsed.values || {});
+      } catch (err) {
+        console.error("[openclaw-config] resolver returned invalid JSON:", err instanceof Error ? err.message : err);
+        finish({});
+      }
+    });
+
+    // Write {ids} to resolver's stdin.
+    try {
+      child.stdin?.end(JSON.stringify({ ids }));
+    } catch (err) {
+      console.error("[openclaw-config] resolver stdin write failed:", err instanceof Error ? err.message : err);
+      finish({});
+    }
+  });
 }
 
 /**
  * Read openclaw.json, extract mcp.servers, resolve secret refs, return a
- * normalized map. Cached for the proxy's lifetime — config changes
- * require a proxy restart, which matches openclaw's own hot-reload model
- * (mcp.servers changes are flagged as "requires gateway restart").
+ * normalized map. Cached for RESOLVER_CACHE_TTL_MS (default 60s; override
+ * via CLAUDE_PROXY_OPENCLAW_RESOLVER_TTL_MS) so the proxy picks up
+ * keychain rotations without restart. Parallel callers share one in-flight
+ * Promise to avoid stampedes on the resolver.
  */
-export function loadOpenclawMcpServers(): Record<string, ResolvedMcpServer> {
-  if (cached) return cached.servers;
+export async function loadOpenclawMcpServers(): Promise<Record<string, ResolvedMcpServer>> {
+  if (cached && Date.now() - cached.loadedAt < resolverCacheTtlMs()) {
+    return cached.servers;
+  }
+  if (inflight) return inflight;
 
+  inflight = (async (): Promise<Record<string, ResolvedMcpServer>> => {
+    try {
+      return await doLoad();
+    } finally {
+      inflight = null;
+    }
+  })();
+  return inflight;
+}
+
+async function doLoad(): Promise<Record<string, ResolvedMcpServer>> {
   const path = defaultConfigPath();
   if (!existsSync(path)) {
     console.error(`[openclaw-config] not found: ${path} — skipping openclaw-config import`);
@@ -190,7 +279,7 @@ export function loadOpenclawMcpServers(): Record<string, ResolvedMcpServer> {
       console.error(`[openclaw-config] no resolver command for provider "${provider}", skipping ${ids.size} secret(s)`);
       continue;
     }
-    resolved.set(provider, callResolver(providerCfg.command, [...ids]));
+    resolved.set(provider, await callResolver(providerCfg.command, [...ids]));
   }
 
   const out: Record<string, ResolvedMcpServer> = {};
@@ -226,5 +315,14 @@ export function loadOpenclawMcpServers(): Record<string, ResolvedMcpServer> {
 /** For tests: drop the cache so a subsequent load re-reads the file. */
 export function _clearCacheForTesting(): void {
   cached = null;
+  inflight = null;
   lastSecretDecisions = [];
+}
+
+/**
+ * For tests: swap the resolver with a deterministic stub (counter, timeout
+ * sim, etc.). Pass null to restore the real spawn-based resolver.
+ */
+export function _setResolverForTesting(fn: ResolverFn | null): void {
+  resolverOverride = fn;
 }
