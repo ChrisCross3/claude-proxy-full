@@ -35,7 +35,7 @@ import { getSecretResolutionDecisions, loadOpenclawMcpServers, type ResolvedMcpS
 import { applyMcpPolicy, secretDecisionsToTrace } from "../mcp/governance.js";
 import type { TraceMcpDecision } from "../trace/types.js";
 import { parseStreamJsonLine } from "./stream-json-parser.js";
-import { pushClaudeFlagIfSupported, supportsClaudeFlag } from "./claude-flags.js";
+import { pushClaudeFlagIfSupported } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 
@@ -181,79 +181,110 @@ export class StreamJsonSubprocess extends EventEmitter {
     // rather than silently spawn without it. Never let intent disappear into
     // a degraded run.
     if (options.effort) {
-      const supported = await supportsClaudeFlag("--effort");
-      if (!supported) {
-        throw new Error(
-          `Claude CLI does not support --effort (capability check via 'claude --help'). ` +
-          `reasoning_effort='${options.effort}' was requested; either run 'claude update' or omit reasoning_effort.`,
-        );
-      }
-      args.push("--effort", options.effort);
+      await pushClaudeFlagIfSupported(args, "--effort", {
+        value: options.effort,
+        strict: true,
+        requestedValueLabel: options.effort,
+      });
     }
     // Thinking: --settings inline JSON. claude --help has had --settings for
     // a long time; we still capability-check before pushing, never silently drop.
     if (options.thinking !== undefined) {
-      const supported = await supportsClaudeFlag("--settings");
-      if (!supported) {
-        throw new Error(
-          `Claude CLI does not support --settings (capability check via 'claude --help'). ` +
-          `thinking='${options.thinking}' was requested; either run 'claude update' or omit thinking.`,
-        );
-      }
-      args.push("--settings", JSON.stringify({ alwaysThinkingEnabled: options.thinking }));
+      await pushClaudeFlagIfSupported(args, "--settings", {
+        value: JSON.stringify({ alwaysThinkingEnabled: options.thinking }),
+        strict: true,
+        requestedValueLabel: String(options.thinking),
+      });
     }
-    // Optional verbose logging filter — passthrough of claude --debug.
+    // Optional verbose logging filter — passthrough of claude --debug (silent skip).
     if (options.debug) {
       await pushClaudeFlagIfSupported(args, "--debug", { value: options.debug });
     }
 
-    // Optional per-request USD spending cap (print-mode only upstream — we
-    // still call pushClaudeFlagIfSupported so the cache stays accurate).
+    // Optional per-request USD spending cap.
     if (options.maxBudgetUsd !== undefined) {
-      await pushClaudeFlagIfSupported(args, "--max-budget-usd", { value: String(options.maxBudgetUsd) });
+      await pushClaudeFlagIfSupported(args, "--max-budget-usd", {
+        value: String(options.maxBudgetUsd),
+        strict: true,
+        requestedValueLabel: String(options.maxBudgetUsd),
+      });
     }
 
     // Permission mode (e.g. plan, bypassPermissions). Already whitelist-
     // validated at the adapter; the spawner only checks CLI capability.
     if (options.permissionMode) {
-      await pushClaudeFlagIfSupported(args, "--permission-mode", { value: options.permissionMode });
+      await pushClaudeFlagIfSupported(args, "--permission-mode", {
+        value: options.permissionMode,
+        strict: true,
+        requestedValueLabel: options.permissionMode,
+      });
     }
 
     // System prompt replacement / append. Both flags coexist (append takes
     // effect on top of the replacement); --system-prompt-file is intentionally
     // not exposed here — we accept the prompt as inline text.
     if (options.systemPrompt) {
-      await pushClaudeFlagIfSupported(args, "--system-prompt", { value: options.systemPrompt });
+      await pushClaudeFlagIfSupported(args, "--system-prompt", {
+        value: options.systemPrompt,
+        strict: true,
+        requestedValueLabel: "<set>",
+      });
     }
     if (options.appendSystemPrompt) {
-      await pushClaudeFlagIfSupported(args, "--append-system-prompt", { value: options.appendSystemPrompt });
+      await pushClaudeFlagIfSupported(args, "--append-system-prompt", {
+        value: options.appendSystemPrompt,
+        strict: true,
+        requestedValueLabel: "<set>",
+      });
     }
 
     // Subagent selection: --agent NAME or --agents <inline JSON>. Both can
     // coexist per Anthropic's docs (named selection + ad-hoc definitions).
     if (options.agent) {
-      await pushClaudeFlagIfSupported(args, "--agent", { value: options.agent });
+      await pushClaudeFlagIfSupported(args, "--agent", {
+        value: options.agent,
+        strict: true,
+        requestedValueLabel: options.agent,
+      });
     }
     if (options.agents) {
-      await pushClaudeFlagIfSupported(args, "--agents", { value: JSON.stringify(options.agents) });
+      await pushClaudeFlagIfSupported(args, "--agents", {
+        value: JSON.stringify(options.agents),
+        strict: true,
+        requestedValueLabel: "<inline JSON>",
+      });
     }
 
     // Minimal-mode spawn: skip hooks/skills/plugins/MCP/auto-memory/CLAUDE.md
     // discovery. Sets CLAUDE_CODE_SIMPLE env in claude-CLI internally.
     if (options.bare) {
-      await pushClaudeFlagIfSupported(args, "--bare");
+      await pushClaudeFlagIfSupported(args, "--bare", {
+        strict: true,
+        requestedValueLabel: "true",
+      });
     }
     // Disable slash commands in subprocess.
     if (options.disableSlashCommands) {
-      await pushClaudeFlagIfSupported(args, "--disable-slash-commands");
+      await pushClaudeFlagIfSupported(args, "--disable-slash-commands", {
+        strict: true,
+        requestedValueLabel: "true",
+      });
     }
     // JSON Schema for structured output (print-mode only upstream).
     if (options.jsonSchema) {
-      await pushClaudeFlagIfSupported(args, "--json-schema", { value: JSON.stringify(options.jsonSchema) });
+      await pushClaudeFlagIfSupported(args, "--json-schema", {
+        value: JSON.stringify(options.jsonSchema),
+        strict: true,
+        requestedValueLabel: "<inline JSON>",
+      });
     }
     // Cap on agentic turns (print-mode only upstream).
     if (options.maxTurns !== undefined) {
-      await pushClaudeFlagIfSupported(args, "--max-turns", { value: String(options.maxTurns) });
+      await pushClaudeFlagIfSupported(args, "--max-turns", {
+        value: String(options.maxTurns),
+        strict: true,
+        requestedValueLabel: String(options.maxTurns),
+      });
     }
     if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
       args.push("--dangerously-skip-permissions");
