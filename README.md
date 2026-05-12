@@ -2,7 +2,7 @@
 
 `openclaw-claude-proxy` exposes the official Claude Code CLI as a local OpenAI-compatible HTTP server. It lets OpenAI-compatible clients talk to a local `claude` CLI session using familiar `/v1/chat/completions`, `/v1/responses`, `/v1/models`, streaming, usage, health, metrics, and tracing endpoints.
 
-The installed executable remains `claude-proxy`. The proxy is designed for local developer and automation setups, especially [OpenClaw](https://github.com/openclaw/openclaw), but it also works with SDKs and tools that can point at an OpenAI-compatible base URL.
+The installed executable is `claude-proxy` (from `package.json` `bin`). In this fork, the recommended systemd-user deployment uses the unit name `claude-proxy-full.service` to distinguish it from any upstream `mehdic/openclaw-claude-proxy` install running side-by-side. The proxy is designed for local developer and automation setups, especially [OpenClaw](https://github.com/openclaw/openclaw), but it also works with SDKs and tools that can point at an OpenAI-compatible base URL.
 
 > **OAuth safety: `openclaw-claude-proxy` does not extract, read, copy, export, or store Claude Code OAuth tokens. It launches the official `claude` CLI in the background and lets Claude Code handle authentication the normal way. In other words, the proxy uses Claude Code as Anthropic expects it to be used, instead of scraping credentials or reimplementing Anthropic's login flow.**
 
@@ -70,7 +70,7 @@ curl http://127.0.0.1:3456/v1/chat/completions \
   }'
 ```
 
-No proxy API key is required by default. Authentication is whatever the local `claude` CLI has already established.
+No proxy API key is required by default. Authentication is whatever the local `claude` CLI has already established. Opt-in Bearer-token auth, CORS whitelisting, and a cold-spawn rate limit are available — see the [Security / Hardening](docs/configuration.md#security--hardening) section of the configuration guide.
 
 ## Documentation
 
@@ -162,7 +162,16 @@ npm run monitor:live
 
 ## Fork lineage
 
-This repository is based on `mnemon-dev/claude-max-api-proxy` and extends it with OpenClaw-oriented compatibility, persistent runtime hardening, tracing, monitoring, tool handling, and operational documentation.
+Lineage chain: `mnemon-dev/claude-max-api-proxy` → `mehdic/openclaw-claude-proxy` → `ChrisCross3/claude-proxy-full` (this repository).
+
+`mnemon-dev/claude-max-api-proxy` provided the original Claude-Code-as-OpenAI-proxy idea. `mehdic/openclaw-claude-proxy` extended it with OpenClaw-oriented compatibility, persistent runtime hardening, tracing, monitoring, tool handling, and operational documentation. This fork (`ChrisCross3/claude-proxy-full`) adds Welle-3 features on top:
+
+- **Model registry + strict adapter** — per-model context-window registry, `ModelValidationError` → HTTP 400 instead of silent default-fallback for unknown models.
+- **Per-request CLI flag passthrough** — `reasoning_effort` → `--effort`, `thinking`, `debug`, `permission_mode`, `system_prompt`/`append_system_prompt`, `agent`/`agents`, `max_budget_usd`, `max_turns`, `bare`, `disable_slash_commands`, `json_schema`. Wired through types → adapter → spawner pool → pool fingerprint so distinct flag combinations get distinct warm workers.
+- **OpenRouter masking** — `src/adapter/openrouter-normalize.ts` strips the `anthropic/` model prefix and lifts `reasoning` (top-level *or* `extra_body`) so callers configured for OpenRouter (e.g. OpenRouter-client) can drive the proxy unchanged.
+- **Opt-in security middleware** — Bearer-token auth, CORS origin whitelist, cold-spawn token-bucket rate limit (see [Security / Hardening](docs/configuration.md#security--hardening)).
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full Welle-3 design, including the spawner pipeline and pool-fingerprint model.
 
 ## License
 
