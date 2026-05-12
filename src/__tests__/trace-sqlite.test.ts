@@ -61,6 +61,25 @@ test("persistTraceSqlite writes queryable durable trace rows", { skip: !sqliteAv
 });
 
 
+test("persistTraceSqlite persists huge record_json (>2 MB) via stdin pipe", { skip: !sqliteAvailable() }, async () => {
+  resetTraceSqliteForTests();
+  const db = join(mkdtempSync(join(tmpdir(), "claude-proxy-traces-huge-")), "traces.sqlite");
+  // Build a ~3 MB payload via large argumentKeys string. JSON.stringify(trace) embeds it,
+  // exceeding ARG_MAX on most platforms (Linux ~128 KB, Windows ~32 KB) — only stdin works.
+  const big = "x".repeat(3 * 1024 * 1024);
+  await persistTraceSqliteSyncForTests(
+    trace({ traceId: "huge", requestId: "huge", toolCallsParsed: [{ id: "call_huge", name: "lookup", argumentKeys: [big] }] }),
+    db,
+  );
+
+  const count = execFileSync("sqlite3", [db, "SELECT COUNT(*) FROM traces WHERE trace_id='huge';"], { encoding: "utf8" }).trim();
+  assert.equal(count, "1");
+  // Read length back via SQL function (avoids dumping 3 MB through argv on read side).
+  const len = execFileSync("sqlite3", [db, "SELECT length(record_json) FROM traces WHERE trace_id='huge';"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
+  assert.ok(Number(len) > 3 * 1024 * 1024, `expected huge record_json, got length=${len}`);
+});
+
+
 test("persistTraceSqlite prunes rows older than configured retention", { skip: !sqliteAvailable() }, async () => {
   resetTraceSqliteForTests();
   const db = join(mkdtempSync(join(tmpdir(), "claude-proxy-traces-retention-")), "traces.sqlite");

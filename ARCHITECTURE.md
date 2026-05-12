@@ -72,7 +72,7 @@ Streaming / sticky:
 | `src/subprocess/sticky-session-pool.ts` | Sticky-Session-Key → Worker-Pinning |
 | `src/subprocess/claude-flags.ts` | Flag-Set-Builder + Strict-Validation |
 | `src/subprocess/stream-json-parser.ts` | NDJSON-Parser mit Buffer-Cap |
-| `src/trace/*` | OTLP-Builder, SQLite-Store, Redaktor, Exporter |
+| `src/trace/*` | OTLP-Builder, SQLite-Store, Redaktor, Exporter. `src/trace/sqlite.ts` pipet SQL über `sqlite3 -batch`-stdin statt argv — vermeidet `ARG_MAX` bei großen `record_json`-Blobs (mehrere MB). |
 | `src/mcp/*` | MCP-Governance + openclaw-Config |
 | `src/n8n/*` | n8n-Detector + Progress-Reporting |
 | `src/errors.ts` | Domain-Errors (`ColdSpawnRateLimitedError`, etc.) |
