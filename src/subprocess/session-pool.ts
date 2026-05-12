@@ -138,6 +138,10 @@ function systemPromptKey(systemPrompt?: string, appendSystemPrompt?: string): st
  * order) hash identically. Exported for unit-test visibility.
  */
 export function stableStringify(value: unknown): string {
+  // JSON.stringify(undefined) returns the string "undefined" (not valid JSON);
+  // canonicalize to "null" so undefined values can participate in deterministic
+  // fingerprints without producing literal "undefined" tokens in the output.
+  if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) {
     return "[" + value.map(stableStringify).join(",") + "]";
