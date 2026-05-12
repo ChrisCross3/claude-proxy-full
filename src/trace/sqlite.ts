@@ -58,11 +58,14 @@ export function persistTraceSqlite(trace: TraceRecord): void {
     ensureDb(dbPath);
     const sql = `${buildInsertSql(trace)}
 ${buildPruneSql(Date.now())}`;
-    execFile("sqlite3", [dbPath, sql], { timeout: 2_000, maxBuffer: 128_000 }, (err) => {
+    // SQL über stdin gepiped — vermeidet ARG_MAX bei großen record_json (~MB).
+    const child = execFile("sqlite3", [dbPath, "-batch"], { timeout: 2_000, maxBuffer: 128_000 }, (err) => {
       if (err && process.env.CLAUDE_PROXY_TRACE_SQLITE_DEBUG === "1") {
         console.error("[trace-sqlite] persist failed", err.message || String(err));
       }
     });
+    child.stdin?.on("error", () => { /* swallow EPIPE */ });
+    child.stdin?.end(sql);
   } catch (err) {
     if (process.env.CLAUDE_PROXY_TRACE_SQLITE_DEBUG === "1") {
       console.error("[trace-sqlite] setup failed", err instanceof Error ? err.message : String(err));
@@ -77,13 +80,17 @@ export function persistTraceSqliteSyncForTests(trace: TraceRecord, dbPath: strin
     try {
       mkdirSync(dirname(dbPath), { recursive: true });
       ensureDb(dbPath);
-      execFile("sqlite3", [dbPath, `${buildInsertSql(trace)}
-${buildPruneSql(Date.now())}`], { timeout: 2_000, maxBuffer: 128_000 }, (err) => {
+      const sql = `${buildInsertSql(trace)}
+${buildPruneSql(Date.now())}`;
+      // SQL über stdin gepiped — vermeidet ARG_MAX bei großen record_json (~MB).
+      const child = execFile("sqlite3", [dbPath, "-batch"], { timeout: 2_000, maxBuffer: 128_000 }, (err) => {
         if (prev === undefined) delete process.env.CLAUDE_PROXY_TRACE_SQLITE_PATH;
         else process.env.CLAUDE_PROXY_TRACE_SQLITE_PATH = prev;
         if (err) reject(err);
         else resolve();
       });
+      child.stdin?.on("error", () => { /* swallow EPIPE */ });
+      child.stdin?.end(sql);
     } catch (err) {
       if (prev === undefined) delete process.env.CLAUDE_PROXY_TRACE_SQLITE_PATH;
       else process.env.CLAUDE_PROXY_TRACE_SQLITE_PATH = prev;
@@ -95,7 +102,8 @@ ${buildPruneSql(Date.now())}`], { timeout: 2_000, maxBuffer: 128_000 }, (err) =>
 function ensureDb(dbPath: string): void {
   if (initializedPaths.has(dbPath)) return;
   try {
-    execFileSync("sqlite3", [dbPath, CREATE_SQL], { timeout: 2_000, maxBuffer: 128_000 });
+    // SQL über stdin gepiped — vermeidet ARG_MAX (CREATE_SQL ist klein, aber Konsistenz).
+    execFileSync("sqlite3", [dbPath, "-batch"], { input: Buffer.from(CREATE_SQL), timeout: 2_000, maxBuffer: 128_000 });
     initializedPaths.add(dbPath);
   } catch (err) {
     if (process.env.CLAUDE_PROXY_TRACE_SQLITE_DEBUG === "1") {
