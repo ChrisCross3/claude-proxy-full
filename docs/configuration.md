@@ -313,6 +313,38 @@ npm start
 
 Implementation: `src/server/middleware/cold-spawn-limit.ts`.
 
+### Reverse-Proxy & Client-IP
+
+When the proxy runs behind a reverse proxy (nginx, Traefik, Caddy) the
+real client IP is in `X-Forwarded-For` rather than on the socket. Express
+only honors `X-Forwarded-For` when explicitly told to trust it; otherwise
+clients could spoof the header to evade per-IP rate limits.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CLAUDE_PROXY_TRUST_PROXY` | unset (= `false`) | Configures Express `trust proxy`. See values table below. Invalid values throw at boot. |
+
+| Value | Effect |
+| --- | --- |
+| unset / empty | `false` — ignore `X-Forwarded-For`, use socket address |
+| `loopback` | Trust `127.0.0.1` / `::1` only |
+| `linklocal` | Trust link-local ranges |
+| `uniquelocal` | Trust private + loopback |
+| numeric (e.g. `1`, `2`) | Trust this many hop counts |
+| IP / CIDR list (e.g. `10.0.0.0/8,192.168.0.1`) | Trust these specific addresses |
+
+Example (proxy behind nginx on the same host):
+
+```bash
+CLAUDE_PROXY_TRUST_PROXY=loopback \
+CLAUDE_PROXY_COLD_SPAWN_LIMIT_PER_MIN=20 \
+npm start
+```
+
+Implementation: `src/server/trust-proxy.ts`. The cold-spawn limiter's
+`extractCallerKey` only consults `X-Forwarded-For` when `trust proxy` is
+not `false`, so the default deployment cannot be spoofed.
+
 ### Recommended rollout
 
 1. **First**: enable CORS whitelist + Bearer-Auth together (`CLAUDE_PROXY_ALLOWED_ORIGINS` plus `CLAUDE_PROXY_API_KEY`). These two together close the obvious cross-origin and unauthenticated-caller holes.

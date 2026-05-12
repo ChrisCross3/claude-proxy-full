@@ -10,6 +10,7 @@ import { handleChatCompletions, handleModels, handleHealth, handleHealthDeep, ha
 import { handleMetrics } from "./metrics.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { authMiddleware } from "./middleware/auth.js";
+import { configureTrustProxy } from "./trust-proxy.js";
 
 export interface ServerConfig {
   port: number;
@@ -23,6 +24,10 @@ let serverInstance: Server | null = null;
  */
 function createApp(): Express {
   const app = express();
+
+  // Reverse-proxy / client-IP handling. Default off; opt-in via
+  // CLAUDE_PROXY_TRUST_PROXY (see docs/configuration.md).
+  configureTrustProxy(app);
 
   // Middleware
   app.use(express.json({ limit: "10mb" }));
