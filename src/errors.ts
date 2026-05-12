@@ -30,6 +30,7 @@ export type ProtocolErrorClass =
   | "context_length"
   // Client errors
   | "invalid_request"
+  | "client_disconnect"
   // Proxy internal
   | "internal_error"
   // Unknown / catch-all
