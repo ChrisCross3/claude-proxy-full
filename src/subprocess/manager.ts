@@ -6,7 +6,7 @@
  */
 
 import { spawn, ChildProcess } from "child_process";
-import { supportsClaudeFlag } from "./claude-flags.js";
+import { pushClaudeFlagIfSupported } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { EventEmitter } from "events";
@@ -239,107 +239,106 @@ export class ClaudeSubprocess extends EventEmitter {
     // Effort: strict capability check, throw on mismatch — never spawn a
     // degraded process when the caller asked for a specific level.
     if (options.effort) {
-      const supported = await supportsClaudeFlag("--effort");
-      if (!supported) {
-        throw new Error(
-          `Claude CLI does not support --effort (capability check via 'claude --help'). ` +
-          `reasoning_effort='${options.effort}' was requested; either run 'claude update' or omit reasoning_effort.`,
-        );
-      }
-      args.push("--effort", options.effort);
+      await pushClaudeFlagIfSupported(args, "--effort", {
+        value: options.effort,
+        strict: true,
+        requestedValueLabel: options.effort,
+      });
     }
 
     // Thinking: --settings inline JSON injection, capability-checked.
     if (options.thinking !== undefined) {
-      const supported = await supportsClaudeFlag("--settings");
-      if (!supported) {
-        throw new Error(
-          `Claude CLI does not support --settings (capability check via 'claude --help'). ` +
-          `thinking='${options.thinking}' was requested; either run 'claude update' or omit thinking.`,
-        );
-      }
-      args.push("--settings", JSON.stringify({ alwaysThinkingEnabled: options.thinking }));
+      await pushClaudeFlagIfSupported(args, "--settings", {
+        value: JSON.stringify({ alwaysThinkingEnabled: options.thinking }),
+        strict: true,
+        requestedValueLabel: String(options.thinking),
+      });
     }
 
-    // Optional verbose logging filter — passthrough of claude --debug.
+    // Optional verbose logging filter — passthrough of claude --debug (silent skip).
     if (options.debug) {
-      const supported = await supportsClaudeFlag("--debug");
-      if (supported) {
-        args.push("--debug", options.debug);
-      }
+      await pushClaudeFlagIfSupported(args, "--debug", { value: options.debug });
     }
 
     // Optional per-request USD spending cap (print-mode only per Anthropic).
     if (options.maxBudgetUsd !== undefined) {
-      const supported = await supportsClaudeFlag("--max-budget-usd");
-      if (supported) {
-        args.push("--max-budget-usd", String(options.maxBudgetUsd));
-      }
+      await pushClaudeFlagIfSupported(args, "--max-budget-usd", {
+        value: String(options.maxBudgetUsd),
+        strict: true,
+        requestedValueLabel: String(options.maxBudgetUsd),
+      });
     }
 
     // Permission mode for tool calls. Whitelist-validated at adapter layer.
     if (options.permissionMode) {
-      const supported = await supportsClaudeFlag("--permission-mode");
-      if (supported) {
-        args.push("--permission-mode", options.permissionMode);
-      }
+      await pushClaudeFlagIfSupported(args, "--permission-mode", {
+        value: options.permissionMode,
+        strict: true,
+        requestedValueLabel: options.permissionMode,
+      });
     }
 
     // System prompt replacement / append (both can coexist; append wins last).
     if (options.systemPrompt) {
-      const supported = await supportsClaudeFlag("--system-prompt");
-      if (supported) {
-        args.push("--system-prompt", options.systemPrompt);
-      }
+      await pushClaudeFlagIfSupported(args, "--system-prompt", {
+        value: options.systemPrompt,
+        strict: true,
+        requestedValueLabel: "<set>",
+      });
     }
     if (options.appendSystemPrompt) {
-      const supported = await supportsClaudeFlag("--append-system-prompt");
-      if (supported) {
-        args.push("--append-system-prompt", options.appendSystemPrompt);
-      }
+      await pushClaudeFlagIfSupported(args, "--append-system-prompt", {
+        value: options.appendSystemPrompt,
+        strict: true,
+        requestedValueLabel: "<set>",
+      });
     }
 
     // Subagent selection: --agent NAME and/or --agents <inline JSON>.
     if (options.agent) {
-      const supported = await supportsClaudeFlag("--agent");
-      if (supported) {
-        args.push("--agent", options.agent);
-      }
+      await pushClaudeFlagIfSupported(args, "--agent", {
+        value: options.agent,
+        strict: true,
+        requestedValueLabel: options.agent,
+      });
     }
     if (options.agents) {
-      const supported = await supportsClaudeFlag("--agents");
-      if (supported) {
-        args.push("--agents", JSON.stringify(options.agents));
-      }
+      await pushClaudeFlagIfSupported(args, "--agents", {
+        value: JSON.stringify(options.agents),
+        strict: true,
+        requestedValueLabel: "<inline JSON>",
+      });
     }
 
     // Minimal-mode spawn.
     if (options.bare) {
-      const supported = await supportsClaudeFlag("--bare");
-      if (supported) {
-        args.push("--bare");
-      }
+      await pushClaudeFlagIfSupported(args, "--bare", {
+        strict: true,
+        requestedValueLabel: "true",
+      });
     }
     // Disable slash commands.
     if (options.disableSlashCommands) {
-      const supported = await supportsClaudeFlag("--disable-slash-commands");
-      if (supported) {
-        args.push("--disable-slash-commands");
-      }
+      await pushClaudeFlagIfSupported(args, "--disable-slash-commands", {
+        strict: true,
+        requestedValueLabel: "true",
+      });
     }
     // JSON Schema for structured output.
     if (options.jsonSchema) {
-      const supported = await supportsClaudeFlag("--json-schema");
-      if (supported) {
-        args.push("--json-schema", JSON.stringify(options.jsonSchema));
-      }
+      await pushClaudeFlagIfSupported(args, "--json-schema", {
+        value: JSON.stringify(options.jsonSchema),
+        strict: true,
+        requestedValueLabel: "<inline JSON>",
+      });
     }
     // Cap on agentic turns.
     if (options.maxTurns !== undefined) {
-      const supported = await supportsClaudeFlag("--max-turns");
-      if (supported) {
-        args.push("--max-turns", String(options.maxTurns));
-      }
+      await pushClaudeFlagIfSupported(args, "--max-turns", {
+        value: String(options.maxTurns),
+        strict: true,
+        requestedValueLabel: String(options.maxTurns),
+      });
     }
 
     return args;
