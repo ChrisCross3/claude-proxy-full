@@ -21,7 +21,14 @@ const N8N_API_URL = process.env.CLAUDE_PROXY_N8N_API_URL || "";
 const N8N_API_KEY = process.env.CLAUDE_PROXY_N8N_API_KEY || "";
 const ENABLED = !!(N8N_API_URL && N8N_API_KEY);
 
+// Positive snapshot is reusable for the full SSE keepalive window — 3s aligns
+// with the 5s keepalive cycle in routes-stream so two consecutive cycles share
+// at most one upstream call.
 const CACHE_TTL_MS = 3000;
+// Negative results (no running execution, network/HTTP error) get a shorter
+// TTL: a workflow that *just* started will then become visible within ~1s
+// instead of being suppressed for a full 3s window.
+const NEG_CACHE_TTL_MS = 1000;
 const FETCH_TIMEOUT_MS = 2500;
 
 interface ProgressSnapshot {
@@ -41,7 +48,10 @@ export function n8nProgressEnabled(): boolean {
 export async function getRunningExecution(): Promise<ProgressSnapshot | null> {
   if (!ENABLED) return null;
 
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.value;
+  if (cache) {
+    const ttl = cache.value === null ? NEG_CACHE_TTL_MS : CACHE_TTL_MS;
+    if (Date.now() - cache.at < ttl) return cache.value;
+  }
 
   try {
     const ctrl = new AbortController();
@@ -75,6 +85,11 @@ export async function getRunningExecution(): Promise<ProgressSnapshot | null> {
     cache = { value: null, at: Date.now() };
     return null;
   }
+}
+
+/** Test-only: drop the cached snapshot so the next call hits fetch again. */
+export function __resetN8nProgressCacheForTests(): void {
+  cache = null;
 }
 
 /** Format a snapshot as a short human-readable line for embedding in a chunk. */
