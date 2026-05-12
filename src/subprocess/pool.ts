@@ -14,7 +14,10 @@
  */
 
 import { ClaudeSubprocess } from "./manager.js";
+import type { SubprocessOptions } from "./manager.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
+
+export type AcquireOptions = Omit<SubprocessOptions, "model" | "sessionId" | "cwd" | "timeout">;
 
 const MAX_IDLE_MS = 2500; // <3s claude --print stdin deadline
 const ENABLED = process.env.CLAUDE_PROXY_WARM_POOL === "1";
@@ -32,10 +35,29 @@ const refilling: Set<ClaudeModel> = new Set();
  * available, pop it; otherwise spawn fresh. Either way, kick off a background
  * refill so the next request also gets a warm subprocess.
  */
-export async function acquireSubprocess(model: ClaudeModel, disallowedTools: string[] = []): Promise<ClaudeSubprocess> {
-  if (!ENABLED || disallowedTools.length > 0) {
+export async function acquireSubprocess(
+  model: ClaudeModel,
+  options: AcquireOptions = {},
+): Promise<ClaudeSubprocess> {
+  const needsDedicated =
+    (options.disallowedTools && options.disallowedTools.length > 0)
+    || !!options.effort
+    || options.thinking !== undefined
+    || !!options.debug
+    || options.maxBudgetUsd !== undefined
+    || !!options.permissionMode
+    || !!options.systemPrompt
+    || !!options.appendSystemPrompt
+    || !!options.agent
+    || !!options.agents
+    || !!options.bare
+    || !!options.disableSlashCommands
+    || !!options.jsonSchema
+    || options.maxTurns !== undefined;
+
+  if (!ENABLED || needsDedicated) {
     const sub = new ClaudeSubprocess();
-    await sub.prepare({ model, ...(disallowedTools.length > 0 ? { disallowedTools } : {}) });
+    await sub.prepare({ model, ...options });
     return sub;
   }
 

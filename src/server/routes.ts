@@ -7,7 +7,7 @@
 import type { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { ClaudeSubprocess } from "../subprocess/manager.js";
-import { acquireSubprocess } from "../subprocess/pool.js";
+import { acquireSubprocess, type AcquireOptions } from "../subprocess/pool.js";
 import { acquireSession, returnSession, discardSession } from "../subprocess/session-pool.js";
 import { acquirePreInit } from "../subprocess/init-pool.js";
 import { StreamJsonSubprocess } from "../subprocess/stream-json-manager.js";
@@ -81,6 +81,30 @@ function classifyAndRecordError(err: unknown): ProtocolErrorClass {
   const cls = classifyError(err);
   recordErrorClass(cls);
   return cls;
+}
+
+/**
+ * Map CliInput onto the subset of fields acquireSubprocess understands.
+ * Ensures all CLI flag fields propagate into print-mode spawns (warm-pool
+ * path otherwise drops them — see Fix #1 in feat/model-registry).
+ */
+function toAcquireOptions(cli: ReturnType<typeof openaiToCli>): AcquireOptions {
+  return {
+    disallowedTools: cli.disallowedTools,
+    effort: cli.effort,
+    thinking: cli.thinking,
+    debug: cli.debug,
+    maxBudgetUsd: cli.maxBudgetUsd,
+    permissionMode: cli.permissionMode,
+    systemPrompt: cli.systemPrompt,
+    appendSystemPrompt: cli.appendSystemPrompt,
+    agent: cli.agent,
+    agents: cli.agents,
+    bare: cli.bare,
+    disableSlashCommands: cli.disableSlashCommands,
+    jsonSchema: cli.jsonSchema,
+    maxTurns: cli.maxTurns,
+  };
 }
 
 /**
@@ -372,7 +396,7 @@ export async function handleChatCompletions(
     const cliInput = openaiToCli(body);
     let subprocess: ClaudeSubprocess;
     try {
-      subprocess = await acquireSubprocess(cliInput.model, cliInput.disallowedTools);
+      subprocess = await acquireSubprocess(cliInput.model, toAcquireOptions(cliInput));
     } catch (err) {
       recordSpawnFailure("print");
       tb.setError(classifyError(err), (err as Error).message);
@@ -1349,7 +1373,7 @@ async function handleResponsesNonStreaming(
   tb: TraceBuilder,
 ): Promise<void> {
   const cliInput = openaiToCli(chatReq);
-  const subprocess = await acquireSubprocess(cliInput.model, cliInput.disallowedTools);
+  const subprocess = await acquireSubprocess(cliInput.model, toAcquireOptions(cliInput));
 
   return new Promise((resolve) => {
     let finalResult: ClaudeCliResult | null = null;
@@ -1424,7 +1448,7 @@ async function handleResponsesStreaming(
   tb: TraceBuilder,
 ): Promise<void> {
   const cliInput = openaiToCli(chatReq);
-  const subprocess = await acquireSubprocess(cliInput.model, cliInput.disallowedTools);
+  const subprocess = await acquireSubprocess(cliInput.model, toAcquireOptions(cliInput));
   const responseId = `resp_${requestId}`;
   const msgId = `msg_${uuidv4().replace(/-/g, "").slice(0, 12)}`;
 
