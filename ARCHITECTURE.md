@@ -74,7 +74,7 @@ Streaming / sticky:
 | `src/subprocess/claude-flags.ts` | Flag-Set-Builder + Strict-Validation |
 | `src/subprocess/stream-json-parser.ts` | NDJSON-Parser mit Buffer-Cap |
 | `src/trace/*` | OTLP-Builder, SQLite-Store, Redaktor, Exporter. `src/trace/sqlite.ts` pipet SQL über `sqlite3 -batch`-stdin statt argv — vermeidet `ARG_MAX` bei großen `record_json`-Blobs (mehrere MB). |
-| `src/mcp/*` | MCP-Governance + openclaw-Config |
+| `src/mcp/*` | MCP-Governance + openclaw-Config. `openclaw-config.ts` enthält Secret-Resolver-Commands — Threat-Model: ein group/world-writable `openclaw.json` ist eine Privilege-Escalation. `CLAUDE_PROXY_OPENCLAW_STRICT_PERMS` (default `warn`) prüft `statSync().mode & 0o022`; `strict` lehnt Load ab, `off` deaktiviert. POSIX-only. |
 | `src/n8n/*` | n8n-Detector + Progress-Reporting |
 | `src/errors.ts` | Domain-Errors (`ColdSpawnRateLimitedError`, etc.) |
 
