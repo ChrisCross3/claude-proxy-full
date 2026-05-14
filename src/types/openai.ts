@@ -128,6 +128,21 @@ export interface OpenAIChatRequest {
    * integer; non-integer/zero/negative values are silently dropped.
    */
   max_turns?: number;
+  /**
+   * OpenAI Structured Outputs format. Only `type: "json_schema"` is acted on
+   * by the proxy, and only in the "isolated" profile route — there it is
+   * converted to a forced-JSON system prompt before spawning the CLI. On the
+   * default `/v1/chat/completions` route this field is parsed-but-ignored to
+   * preserve legacy behaviour.
+   */
+  response_format?: {
+    type?: "json_schema" | "json_object" | "text";
+    json_schema?: {
+      name?: string;
+      schema?: Record<string, unknown>;
+      strict?: boolean;
+    };
+  };
   claude_proxy?: ClaudeProxyRequestExtension;
 }
 
