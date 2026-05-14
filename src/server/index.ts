@@ -6,7 +6,7 @@
 
 import express, { Express, Request, Response, NextFunction } from "express";
 import { createServer, Server } from "http";
-import { handleChatCompletions, handleModels, handleHealth, handleHealthDeep, handlePricing, handleResponses, handleTraceGet, handleTraceList } from "./routes.js";
+import { handleChatCompletions, handleIsolatedChatCompletions, handleModels, handleHealth, handleHealthDeep, handlePricing, handleResponses, handleTraceGet, handleTraceList } from "./routes.js";
 import { handleMetrics } from "./metrics.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { authMiddleware } from "./middleware/auth.js";
@@ -58,6 +58,11 @@ function createApp(): Express {
   app.get("/models", handleModels);
   app.post("/v1/chat/completions", handleChatCompletions);
   app.post("/chat/completions", handleChatCompletions);
+  // Welle 5 Phase 5A.5.1: isolated profile route for Honcho-style structured
+  // extraction calls. Forces --bare + cwd-isolation + OAuth-env + response_format-mapping
+  // server-side; clients cannot override. Non-streaming only.
+  app.post("/v1/isolated/chat/completions", handleIsolatedChatCompletions);
+  app.post("/isolated/chat/completions", handleIsolatedChatCompletions);
   app.post("/v1/responses", handleResponses);
   app.post("/responses", handleResponses);
   app.get("/traces", handleTraceList);

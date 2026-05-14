@@ -9,9 +9,11 @@ import { spawn, ChildProcess } from "child_process";
 import { pushClaudeFlagIfSupported } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
+import { resolveAnthropicApiKey } from "../auth/credentials-resolver.js";
 import { EventEmitter } from "events";
 import fs from "fs/promises";
 import path from "path";
+import os from "os";
 import type {
   ClaudeCliMessage,
   ClaudeCliAssistant,
@@ -60,6 +62,20 @@ export interface SubprocessOptions {
   jsonSchema?: Record<string, unknown>;
   /** Cap agentic turns (print-mode only). Not in fingerprint. */
   maxTurns?: number;
+  /**
+   * Inject Anthropic OAuth access token (read from ~/.claude/.credentials.json)
+   * as ANTHROPIC_API_KEY env var. Required when bare=true so the CLI has a
+   * non-keychain auth source. Part of fingerprint (different env = different
+   * spawn that must not share a pool slot).
+   */
+  injectOAuthEnv?: boolean;
+  /**
+   * Spawn the subprocess with cwd=os.tmpdir() (or CLAUDE_PROXY_ISOLATED_CWD
+   * if set) instead of the proxy's own cwd. Prevents CLAUDE.md walk-up
+   * discovery from picking up the caller's workspace files. Part of
+   * fingerprint.
+   */
+  isolateCwd?: boolean;
 }
 
 export interface SubprocessEvents {
@@ -88,12 +104,14 @@ export class ClaudeSubprocess extends EventEmitter {
    */
   async prepare(options: SubprocessOptions): Promise<void> {
     const args = await this.buildArgs(options);
+    const cwd = resolveCwd(options);
+    const env = await resolveEnv(options);
 
     return new Promise((resolve, reject) => {
       try {
         this.process = spawn("claude", args, {
-          cwd: options.cwd || process.cwd(),
-          env: { ...process.env, OPENCLAW_PROXY: "1" },
+          cwd,
+          env,
           stdio: ["pipe", "pipe", "pipe"],
         });
 
@@ -434,6 +452,41 @@ export async function verifyClaude(): Promise<{ ok: boolean; error?: string; ver
       }
     });
   });
+}
+
+/**
+ * Resolve the working directory for a spawned subprocess. When isolateCwd is
+ * set, the proxy's own cwd would still let claude walk up to find CLAUDE.md.
+ * Use os.tmpdir() (or CLAUDE_PROXY_ISOLATED_CWD env override) so the walk-up
+ * lands in a directory with no CLAUDE.md files.
+ *
+ * Shared between manager.ts and stream-json-manager.ts so both spawn paths
+ * behave identically.
+ */
+export function resolveCwd(options: { cwd?: string; isolateCwd?: boolean }): string {
+  if (options.isolateCwd) {
+    return process.env.CLAUDE_PROXY_ISOLATED_CWD || os.tmpdir();
+  }
+  return options.cwd || process.cwd();
+}
+
+/**
+ * Resolve the environment block for a spawned subprocess. When injectOAuthEnv
+ * is set, the Anthropic OAuth access token is read from
+ * ~/.claude/.credentials.json and exposed as ANTHROPIC_API_KEY. Required when
+ * spawning with --bare, because --bare disables CLI OAuth/keychain reads.
+ *
+ * Shared between manager.ts and stream-json-manager.ts.
+ */
+export async function resolveEnv(
+  options: { injectOAuthEnv?: boolean },
+): Promise<NodeJS.ProcessEnv> {
+  const base: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_PROXY: "1" };
+  if (options.injectOAuthEnv) {
+    const token = await resolveAnthropicApiKey();
+    base.ANTHROPIC_API_KEY = token;
+  }
+  return base;
 }
 
 /**

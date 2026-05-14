@@ -57,6 +57,10 @@ export interface CliInput {
   jsonSchema?: Record<string, unknown>;
   /** Cap agentic turns (print-mode only). */
   maxTurns?: number;
+  /** Inject Anthropic OAuth token as ANTHROPIC_API_KEY (server-side only, set by profile). */
+  injectOAuthEnv?: boolean;
+  /** Spawn with cwd=os.tmpdir() (server-side only, set by profile). */
+  isolateCwd?: boolean;
 }
 
 /**
@@ -379,10 +383,101 @@ export function messagesToPrompt(
 }
 
 /**
+ * Limit for the inlined-schema portion of the forced-JSON system prompt.
+ * Anthropic models tolerate large prompts but attention flattens past a few
+ * thousand tokens; the JSON-Schema part is rarely needed beyond top-level
+ * field names + types for the deriver-style structured extraction Honcho does.
+ */
+const FORCED_JSON_SCHEMA_MAX_BYTES = 8192;
+
+/**
+ * Convert an OpenAI `response_format` (Structured Outputs) into an aggressive
+ * Claude `--system-prompt` string. Used by the "isolated"-profile route to
+ * bridge the OpenAI-to-Anthropic format gap: Anthropic CLI has no native
+ * enforcement for `response_format: json_schema`, but a sufficiently strict
+ * system prompt + Honcho's existing `json_repair` fence-stripping covers the
+ * gap reliably for json-schema-typed `response_format`.
+ *
+ * Returns `undefined` when:
+ *   - response_format is missing or not a json_schema-typed object
+ *   - the inner schema is missing or empty
+ *   - schema serialization fails (cycles, BigInt, etc.)
+ *
+ * Callers that need to combine with an existing system_prompt should choose
+ * either replace (default in profile config) or append externally.
+ */
+export function responseFormatToSystemPrompt(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const obj = raw as { type?: unknown; json_schema?: unknown };
+  if (obj.type !== "json_schema") return undefined;
+  if (!obj.json_schema || typeof obj.json_schema !== "object") return undefined;
+
+  const wrapper = obj.json_schema as { name?: unknown; schema?: unknown };
+  const schemaRaw = wrapper.schema;
+  if (!schemaRaw || typeof schemaRaw !== "object") return undefined;
+
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(schemaRaw);
+  } catch {
+    return undefined;
+  }
+  if (serialized.length === 0 || serialized === "{}") return undefined;
+
+  let schemaText = serialized;
+  if (schemaText.length > FORCED_JSON_SCHEMA_MAX_BYTES) {
+    schemaText = schemaText.slice(0, FORCED_JSON_SCHEMA_MAX_BYTES);
+    console.error(
+      `[openai-to-cli] responseFormatToSystemPrompt: schema truncated from ${serialized.length} to ${FORCED_JSON_SCHEMA_MAX_BYTES} bytes` +
+        (typeof wrapper.name === "string" ? ` (name=${wrapper.name})` : ""),
+    );
+  }
+
+  const name = typeof wrapper.name === "string" && wrapper.name.length > 0 ? wrapper.name : "Response";
+  return [
+    `You MUST respond with ONLY valid JSON matching the schema below.`,
+    `No prose. No explanations. No commentary.`,
+    `Markdown code fences are allowed but optional — the caller will strip them.`,
+    `Start your response with the opening brace or bracket of the JSON value.`,
+    `Schema name: ${name}`,
+    `JSON Schema:`,
+    schemaText,
+  ].join("\n");
+}
+
+export interface OpenaiToCliOptions {
+  /**
+   * When true, `response_format: {type: "json_schema", ...}` is converted to
+   * an aggressive `system_prompt` via `responseFormatToSystemPrompt()` and
+   * REPLACES any user-supplied system_prompt. Used by the "isolated" profile
+   * for Honcho-style structured-extraction calls. Default false preserves
+   * legacy behaviour on the default `/v1/chat/completions` route.
+   */
+  mapResponseFormat?: boolean;
+  /**
+   * Server-side flag overrides applied AFTER request-body parsing. Used by
+   * profile-bound routes (e.g. /v1/isolated/...) to force flags the client
+   * cannot or should not control (bare, isolateCwd, injectOAuthEnv).
+   * Unset fields leave request-body values intact.
+   */
+  forceFlags?: {
+    bare?: boolean;
+    disableSlashCommands?: boolean;
+    isolateCwd?: boolean;
+    injectOAuthEnv?: boolean;
+  };
+}
+
+/**
  * Convert an OpenAI-wire chat request into Claude CLI input. Performs strict
  * model and effort validation; throws on unknown model or unsupported effort.
+ *
+ * When `opts.mapResponseFormat` is set, an OpenAI `response_format: json_schema`
+ * is converted into a forced-JSON system prompt (see
+ * `responseFormatToSystemPrompt`) and overrides any user-supplied
+ * `system_prompt`.
  */
-export function openaiToCli(request: OpenAIChatRequest): CliInput {
+export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions = {}): CliInput {
   const def = resolveModelStrict(request.model);
   const disallowedTools = externalNativeToolDisallowList(request);
   const effort = extractEffort(request.reasoning_effort);
@@ -396,14 +491,28 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
   const debug = extractDebug(request.debug);
   const maxBudgetUsd = extractMaxBudgetUsd(request.max_budget_usd);
   const permissionMode = extractPermissionMode(request.permission_mode);
-  const systemPrompt = extractSystemPrompt(request.system_prompt);
+  let systemPrompt = extractSystemPrompt(request.system_prompt);
   const appendSystemPrompt = extractAppendSystemPrompt(request.append_system_prompt);
+  if (opts.mapResponseFormat) {
+    const forced = responseFormatToSystemPrompt(request.response_format);
+    if (forced) systemPrompt = forced;
+  }
   const agent = extractAgent(request.agent);
   const agents = extractAgents(request.agents);
-  const bare = extractBare(request.bare);
-  const disableSlashCommands = extractDisableSlashCommands(request.disable_slash_commands);
+  let bare = extractBare(request.bare);
+  let disableSlashCommands = extractDisableSlashCommands(request.disable_slash_commands);
   const jsonSchema = extractJsonSchema(request.json_schema);
   const maxTurns = extractMaxTurns(request.max_turns);
+  let isolateCwd: boolean | undefined;
+  let injectOAuthEnv: boolean | undefined;
+  if (opts.forceFlags) {
+    if (opts.forceFlags.bare !== undefined) bare = opts.forceFlags.bare;
+    if (opts.forceFlags.disableSlashCommands !== undefined) {
+      disableSlashCommands = opts.forceFlags.disableSlashCommands;
+    }
+    if (opts.forceFlags.isolateCwd !== undefined) isolateCwd = opts.forceFlags.isolateCwd;
+    if (opts.forceFlags.injectOAuthEnv !== undefined) injectOAuthEnv = opts.forceFlags.injectOAuthEnv;
+  }
   return {
     prompt: messagesToPrompt(request.messages, request),
     model: def.id,
@@ -422,5 +531,7 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     ...(disableSlashCommands !== undefined ? { disableSlashCommands } : {}),
     ...(jsonSchema ? { jsonSchema } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(isolateCwd !== undefined ? { isolateCwd } : {}),
+    ...(injectOAuthEnv !== undefined ? { injectOAuthEnv } : {}),
   };
 }

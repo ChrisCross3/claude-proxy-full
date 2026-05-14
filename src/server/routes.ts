@@ -9,7 +9,8 @@ import { v4 as uuidv4 } from "uuid";
 import { ClaudeSubprocess } from "../subprocess/manager.js";
 import { acquireSubprocess, type AcquireOptions } from "../subprocess/pool.js";
 import { acquireSession, returnSession, discardSession } from "../subprocess/session-pool.js";
-import { acquirePreInit } from "../subprocess/init-pool.js";
+import { acquirePreInit, acquireBareSlot } from "../subprocess/init-pool.js";
+import { getProfile, type Profile } from "./profiles.js";
 import { StreamJsonSubprocess } from "../subprocess/stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
@@ -247,15 +248,48 @@ function recordSessionModeRejected(mode: ResolvedSessionOptions["mode"] | "stick
   stickyPoolCounters.modeRejected[mode]++;
 }
 
-async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string): Promise<StreamJsonSubprocess> {
+async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string, isolateCwd?: boolean, injectOAuthEnv?: boolean): Promise<StreamJsonSubprocess> {
   // Stateless always cold-spawns; charge a token if a callerKey is provided.
   if (callerKey) {
     const limit = consumeColdSpawnToken(callerKey);
     if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
   }
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined) return acquirePreInit(model);
+  // Isolated-profile fast path: when bare + isolateCwd + injectOAuthEnv are
+  // all set, the request is bound to the isolated profile (e.g. Honcho route).
+  // Use the bare-init-pool so subsequent calls skip the ~5s cold-start.
+  // System prompt is per-request (not part of pool init), so the pool is
+  // safe to share across requests that all share the bare/isolated/oauth
+  // triple.
+  if (bare && isolateCwd && injectOAuthEnv) {
+    const sub = await acquireBareSlot(model);
+    // Per-request flags (systemPrompt, maxTurns, etc.) still get applied via
+    // submitTurn() and are not part of the pool slot's spawn args. The slot
+    // itself was spawned with bare+isolateCwd+injectOAuthEnv. If the caller
+    // asks for additional flags that DO require fresh init (disallowedTools,
+    // effort, thinking, agent, agents, appendSystemPrompt, etc.), we fall
+    // back to cold-spawn below to avoid cross-contamination.
+    if (
+      disallowedTools.length === 0 &&
+      !effort &&
+      thinking === undefined &&
+      !debug &&
+      maxBudgetUsd === undefined &&
+      !permissionMode &&
+      !appendSystemPrompt &&
+      !agent &&
+      !agents &&
+      !jsonSchema &&
+      maxTurns === undefined
+    ) {
+      return sub;
+    }
+    // Non-fastpath requirement: discard the slot we just took (caller carries
+    // init-incompatible flags), spawn fresh. Rare path for isolated route.
+    sub.kill();
+  }
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv });
   return subprocess;
 }
 
@@ -1860,4 +1894,168 @@ export function handleTraceList(req: Request, res: Response): void {
   const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
   const data = traceStore.list(limit, offset);
   res.json({ object: "list", data, total: traceStore.size(), ...traceStore.stats() });
+}
+
+/**
+ * Handle POST /v1/isolated/chat/completions (Welle 5 Phase 5A.5.1).
+ *
+ * Minimal stateless OpenAI-compatible endpoint for callers that need:
+ *   - workspace isolation (no CLAUDE.md / MEMORY.md leak)
+ *   - response_format: json_schema enforcement (server-side mapping)
+ *   - --bare CLI spawn (no auto-memory, no hooks, no skills)
+ *
+ * Forces the ISOLATED_PROFILE server-side; clients cannot override.
+ * Non-streaming only — Honcho's deriver is the primary consumer and never
+ * needs SSE. If a future client needs streaming + isolation, extend the
+ * profile system rather than this handler.
+ */
+export async function handleIsolatedChatCompletions(req: Request, res: Response): Promise<void> {
+  const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
+  const traceId = `trc_${requestId}`;
+  const body = req.body as OpenAIChatRequest;
+  const reqStart = Date.now();
+
+  try {
+    normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
+  } catch (err) {
+    if (err instanceof ModelValidationError) {
+      res.status(400).json({
+        error: { message: err.message, type: "invalid_request_error", code: err.code },
+      });
+      return;
+    }
+    throw err;
+  }
+
+  // Streaming is explicitly unsupported on the isolated route — Honcho doesn't
+  // use SSE and supporting it here would duplicate handleChatCompletions.
+  if (body.stream === true) {
+    res.status(400).json({
+      error: {
+        message: "Streaming is not supported on /v1/isolated/chat/completions. Use /v1/chat/completions for streaming.",
+        type: "invalid_request_error",
+        code: "stream_not_supported_on_isolated",
+      },
+    });
+    return;
+  }
+
+  let resolvedModel: string;
+  try {
+    resolvedModel = extractModel(body.model);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown model";
+    res.status(400).json({
+      error: { message, type: "invalid_request_error", code: "unknown_model" },
+    });
+    return;
+  }
+
+  const profile: Profile = getProfile("isolated")!; // defined statically; non-null
+
+  const tb = createTraceBuilder({
+    traceId,
+    requestId,
+    model: resolvedModel,
+    requestedModel: body.model || "unknown",
+    stream: false,
+    endpoint: "chat.completions",
+  });
+  tb.setMessageCount(body.messages?.length || 0);
+  tb.setRuntime("stream-json");
+
+  res.on("close", () => {
+    const status: "ok" | "error" = res.statusCode >= 400 ? "error" : "ok";
+    const canonModel = canonicalizeModelLabel(body.model);
+    recordRequest({ runtime: "stream-json", model: canonModel, status, durationMs: Date.now() - reqStart });
+  });
+
+  let cliInput;
+  try {
+    cliInput = openaiToCli(body, {
+      mapResponseFormat: profile.mapResponseFormat,
+      forceFlags: {
+        bare: profile.bare,
+        disableSlashCommands: profile.disableSlashCommands,
+        isolateCwd: profile.isolateCwd,
+        injectOAuthEnv: profile.injectOAuthEnv,
+      },
+    });
+  } catch (err) {
+    if (err instanceof ModelValidationError) {
+      res.status(400).json({
+        error: { message: err.message, type: "invalid_request_error", code: err.code },
+      });
+      tb.setError("invalid_request", err.message);
+      tb.commit();
+      return;
+    }
+    throw err;
+  }
+
+  setTraceHeader(res, traceId);
+
+  let subprocess: StreamJsonSubprocess;
+  try {
+    subprocess = await acquireStatelessStreamJson(
+      cliInput.model,
+      cliInput.disallowedTools,
+      cliInput.effort,
+      cliInput.thinking,
+      cliInput.debug,
+      cliInput.maxBudgetUsd,
+      cliInput.permissionMode,
+      cliInput.systemPrompt,
+      cliInput.appendSystemPrompt,
+      cliInput.agent,
+      cliInput.agents,
+      cliInput.bare,
+      cliInput.disableSlashCommands,
+      cliInput.jsonSchema,
+      cliInput.maxTurns,
+      extractCallerKey(req),
+      cliInput.isolateCwd,
+      cliInput.injectOAuthEnv,
+    );
+  } catch (err) {
+    if (isColdSpawnRateLimitedError(err)) {
+      sendColdSpawnLimited(res, err.retryAfterSec);
+      tb.setError("cold_spawn_rate_limited", err.message);
+      tb.commit();
+      return;
+    }
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const code = err instanceof Error && err.name === "CredentialsExpiredError" ? 401 : 500;
+    res.status(code).json({
+      error: { message, type: code === 401 ? "authentication_error" : "server_error", code: code === 401 ? "credentials_expired" : "spawn_failed" },
+    });
+    tb.setError(classifyError(err), message);
+    tb.commit();
+    return;
+  }
+
+  try {
+    const result = await subprocess.submitTurn(cliInput.prompt);
+    annotateAndRecordUsage(result, resolvedModel);
+    recordUsageOnTrace(tb, result);
+    tb.setFinishReason("stop");
+    tb.commit();
+    setUsageHeaders(res, result);
+    res.json(cliResultToOpenai(result, requestId, body, cliInput.model));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    tb.setError(classifyError(err), message);
+    tb.commit();
+    console.error(`[Isolated] turn error req_id=${requestId}:`, message);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: { message, type: "server_error", code: "turn_error" },
+      });
+    }
+  } finally {
+    // Stateless: always kill the subprocess. The bare-init-pool will refill
+    // a fresh slot in the background. StreamJsonSubprocess.kill() is
+    // idempotent — re-calling on an already-killed proc is safe.
+    subprocess.kill();
+  }
 }
