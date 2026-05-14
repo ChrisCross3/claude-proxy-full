@@ -14,7 +14,15 @@
 
 import { StreamJsonSubprocess } from "./stream-json-manager.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
-import { hasCredentialsChangedSince, clearDefaultResolverCache } from "../auth/credentials-resolver.js";
+import { hasCredentialsChangedSince, getCachedExpiresAtMs, clearDefaultResolverCache } from "../auth/credentials-resolver.js";
+
+/**
+ * Safety window in ms: a bare-pool slot whose OAuth-token expires within this
+ * window is discarded and respawned. 5 min is conservative — typical Honcho
+ * call duration is ~15s, so this leaves ample headroom for a long-running
+ * call to complete with a still-valid token.
+ */
+const BARE_SLOT_TOKEN_SAFETY_WINDOW_MS = 5 * 60 * 1000;
 
 const ENABLED = process.env.CLAUDE_PROXY_INIT_POOL !== "0"; // default on
 const slots: Map<ClaudeModel, StreamJsonSubprocess> = new Map();
@@ -146,16 +154,31 @@ export async function acquireBareSlot(model: ClaudeModel): Promise<StreamJsonSub
   bareSlots.delete(model);
 
   let result: StreamJsonSubprocess;
-  if (cached && cached.sub.isHealthy() && !(await hasCredentialsChangedSince(cached.spawnedAt))) {
+  const tokenExpiresAt = getCachedExpiresAtMs();
+  const tokenExpiresWithinWindow =
+    tokenExpiresAt !== null && tokenExpiresAt - Date.now() < BARE_SLOT_TOKEN_SAFETY_WINDOW_MS;
+
+  if (
+    cached &&
+    cached.sub.isHealthy() &&
+    !(await hasCredentialsChangedSince(cached.spawnedAt)) &&
+    !tokenExpiresWithinWindow
+  ) {
     console.error(`[InitPool] Bare-pre-init hit for ${model} (age ${cached.sub.getAge()}ms)`);
     result = cached.sub;
   } else {
     if (cached) {
-      console.error(`[InitPool] Stale bare-pre-init for ${model}, killing`);
+      const reason = tokenExpiresWithinWindow
+        ? "token-expiry-window"
+        : "stale-rotation";
+      console.error(`[InitPool] Discarding bare-pre-init for ${model} (${reason}), killing`);
       cached.sub.kill();
-      // If the credentials rotated, clear the resolver cache so the new spawn
-      // picks up the fresh token on the first read.
-      clearDefaultResolverCache();
+      if (!tokenExpiresWithinWindow) {
+        // If the credentials rotated, clear the resolver cache so the new spawn
+        // picks up the fresh token on the first read. Don't clear on
+        // expiry-window: the cache still holds the (still-valid) token.
+        clearDefaultResolverCache();
+      }
     }
     console.error(`[InitPool] No bare-pre-init for ${model}, spawning fresh`);
     result = new StreamJsonSubprocess();

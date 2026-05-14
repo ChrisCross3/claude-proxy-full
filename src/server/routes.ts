@@ -1981,6 +1981,13 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
         injectOAuthEnv: profile.injectOAuthEnv,
       },
     });
+    // Security: enforce profile.forceDisallowedTools server-side. Honcho-style
+    // callers process untrusted user input through a forced-JSON prompt; without
+    // this, --bare leaves Bash/Edit/Read available for prompt-injection abuse.
+    if (profile.forceDisallowedTools.length > 0) {
+      const merged = new Set([...(cliInput.disallowedTools ?? []), ...profile.forceDisallowedTools]);
+      cliInput.disallowedTools = Array.from(merged);
+    }
   } catch (err) {
     if (err instanceof ModelValidationError) {
       res.status(400).json({
@@ -2025,10 +2032,22 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
       return;
     }
     const message = err instanceof Error ? err.message : "Unknown error";
-    const code = err instanceof Error && err.name === "CredentialsExpiredError" ? 401 : 500;
-    res.status(code).json({
-      error: { message, type: code === 401 ? "authentication_error" : "server_error", code: code === 401 ? "credentials_expired" : "spawn_failed" },
-    });
+    // All three credentials-* errors are auth-config issues, not server faults.
+    // Map them to HTTP 401 with distinct codes so callers (Honcho, ops) can
+    // distinguish "rotate token" from "run `claude /login`" from "fix corrupt file".
+    let status = 500;
+    let type: "authentication_error" | "server_error" = "server_error";
+    let code = "spawn_failed";
+    if (err instanceof Error) {
+      if (err.name === "CredentialsExpiredError") {
+        status = 401; type = "authentication_error"; code = "credentials_expired";
+      } else if (err.name === "CredentialsNotFoundError") {
+        status = 401; type = "authentication_error"; code = "credentials_not_found";
+      } else if (err.name === "CredentialsMalformedError") {
+        status = 401; type = "authentication_error"; code = "credentials_malformed";
+      }
+    }
+    res.status(status).json({ error: { message, type, code } });
     tb.setError(classifyError(err), message);
     tb.commit();
     return;
