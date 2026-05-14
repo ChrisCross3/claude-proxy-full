@@ -1915,14 +1915,6 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
   const body = req.body as OpenAIChatRequest;
   const reqStart = Date.now();
 
-  // TEMP DEBUG: log full request body for E2E-debugging (Welle 5 Phase 5A.5.1).
-  // Will be removed before final commit.
-  if (process.env.CLAUDE_PROXY_ISOLATED_DEBUG === "1") {
-    try {
-      console.error(`[isolated-debug] req_id=${requestId} body=${JSON.stringify(body).slice(0, 4000)}`);
-    } catch { /* ignore */ }
-  }
-
   try {
     normalizeOpenRouterRequest(body as unknown as Record<string, unknown>);
   } catch (err) {
