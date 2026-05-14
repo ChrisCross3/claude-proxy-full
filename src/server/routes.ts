@@ -261,13 +261,12 @@ async function acquireStatelessStreamJson(model: string, disallowedTools: string
   // safe to share across requests that all share the bare/isolated/oauth
   // triple.
   if (bare && isolateCwd && injectOAuthEnv) {
-    const sub = await acquireBareSlot(model);
-    // Per-request flags (systemPrompt, maxTurns, etc.) still get applied via
-    // submitTurn() and are not part of the pool slot's spawn args. The slot
-    // itself was spawned with bare+isolateCwd+injectOAuthEnv. If the caller
-    // asks for additional flags that DO require fresh init (disallowedTools,
-    // effort, thinking, agent, agents, appendSystemPrompt, etc.), we fall
-    // back to cold-spawn below to avoid cross-contamination.
+    // Bare-pool slots are spawned without any per-request flags. A pool hit
+    // is only safe when the caller's flags match the slot's spawn args
+    // exactly. systemPrompt in particular is a spawn arg (--system-prompt),
+    // not a stdin field — a warm slot spawned without --system-prompt can
+    // never carry a request-time system_prompt, so any caller with one MUST
+    // cold-spawn.
     if (
       disallowedTools.length === 0 &&
       !effort &&
@@ -275,17 +274,18 @@ async function acquireStatelessStreamJson(model: string, disallowedTools: string
       !debug &&
       maxBudgetUsd === undefined &&
       !permissionMode &&
+      !systemPrompt &&
       !appendSystemPrompt &&
       !agent &&
       !agents &&
       !jsonSchema &&
       maxTurns === undefined
     ) {
-      return sub;
+      return acquireBareSlot(model);
     }
-    // Non-fastpath requirement: discard the slot we just took (caller carries
-    // init-incompatible flags), spawn fresh. Rare path for isolated route.
-    sub.kill();
+    // Pool-incompatible: cold-spawn with the full flag set below. We don't
+    // pre-acquire-then-kill here because the bare pool may not yet hold a
+    // slot (first request), and pre-acquiring would force a redundant spawn.
   }
   if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
