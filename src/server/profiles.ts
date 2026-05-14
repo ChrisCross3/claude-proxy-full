@@ -40,6 +40,14 @@ export interface Profile {
    */
   injectOAuthEnv: boolean;
   /**
+   * CLI tools to forcibly disallow (claude --disallowed-tools).
+   * --bare leaves Bash, Edit, Read enabled by default; for untrusted-input
+   * profiles (e.g. Honcho's response_format extraction) those must be off to
+   * neutralize prompt-injection attempts. Set via Profile-server-side, NOT
+   * overridable by client body.
+   */
+  forceDisallowedTools: string[];
+  /**
    * Pool routing strategy.
    *   "bare":    use the bare-init-pool (warmed `claude --bare` subprocesses)
    *   "default": use the default pre-init-pool
@@ -62,6 +70,11 @@ export const ISOLATED_PROFILE: Profile = {
   isolateCwd: true,
   injectOAuthEnv: true,
   pool: "bare",
+  // Security: --bare leaves Bash/Edit/Read enabled. Untrusted-input callers
+  // (Honcho's response_format extraction processes raw user messages) could
+  // prompt-inject the CLI into running shell commands or reading files.
+  // Disallow all toolchain except the no-op default minimum.
+  forceDisallowedTools: ["Bash", "Edit", "Read", "Write", "Grep", "Glob", "WebFetch", "WebSearch"],
   // runtime intentionally undefined: stream-json (the default) is verified to
   // work with --bare (tested 2026-05-14 on claude CLI 2.1.132). Stream-json
   // is pool-friendly (persistent subprocess across calls) — print-mode would

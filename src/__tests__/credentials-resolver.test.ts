@@ -228,3 +228,38 @@ test("credentials-resolver: hasChangedSince returns true when file missing", asy
   const resolver = stubResolver(fs);
   assert.equal(await resolver.hasChangedSince(1000), true);
 });
+
+test("credentials-resolver: getCachedExpiresAtMs returns null before first resolve", async () => {
+  const fs = makeFs();
+  const resolver = stubResolver(fs);
+  assert.equal(resolver.getCachedExpiresAtMs(), null);
+});
+
+test("credentials-resolver: getCachedExpiresAtMs returns expiresAt after resolve", async () => {
+  const path = "/fake/.claude/.credentials.json";
+  const expiresAt = Date.now() + 3_600_000;
+  const fs = makeFs({
+    [path]: {
+      content: JSON.stringify({
+        claudeAiOauth: { accessToken: "sk-ant-oat01-X", expiresAt },
+      }),
+      mtimeMs: 1000,
+    },
+  });
+  const resolver = stubResolver(fs);
+  await resolver.resolve();
+  assert.equal(resolver.getCachedExpiresAtMs(), expiresAt);
+});
+
+test("credentials-resolver: getCachedExpiresAtMs returns null for legacy-format token (no expiresAt)", async () => {
+  const path = "/fake/.claude/.credentials.json";
+  const fs = makeFs({
+    [path]: {
+      content: JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-LEGACY" } }),
+      mtimeMs: 1000,
+    },
+  });
+  const resolver = stubResolver(fs);
+  await resolver.resolve();
+  assert.equal(resolver.getCachedExpiresAtMs(), null);
+});

@@ -159,6 +159,15 @@ export function createCredentialsResolver(deps: CredentialsResolverDeps = {}) {
         return true;
       }
     },
+    /**
+     * Liefert die expiresAtMs des aktuell gecachten Tokens (oder null wenn
+     * legacy-format ohne expiresAt). Pool-Code nutzt das um warm-Slot-Max-Age
+     * an die Token-Lebenszeit zu binden — Safety-Window ~5 min, damit kein
+     * Slot in-flight expired.
+     */
+    getCachedExpiresAtMs(): number | null {
+      return cache?.expiresAtMs ?? null;
+    },
   };
 }
 
@@ -190,4 +199,9 @@ export function hasCredentialsChangedSince(timestampMs: number): Promise<boolean
     defaultResolver = createCredentialsResolver();
   }
   return defaultResolver.hasChangedSince(timestampMs);
+}
+
+export function getCachedExpiresAtMs(): number | null {
+  if (defaultResolver === null) return null;
+  return defaultResolver.getCachedExpiresAtMs();
 }

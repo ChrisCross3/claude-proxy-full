@@ -12,6 +12,19 @@ test("ISOLATED_PROFILE forces bare + isolateCwd + injectOAuthEnv + mapResponseFo
   assert.equal(ISOLATED_PROFILE.pool, "bare");
 });
 
+test("ISOLATED_PROFILE disallows all tools (security: bare leaves Bash/Edit/Read enabled by default)", () => {
+  // Critical security check: --bare without disallowedTools leaves Bash + Edit
+  // + Read accessible. Honcho-style callers process untrusted user input
+  // through a forced-JSON prompt — any tool access is a prompt-injection vector.
+  const required = ["Bash", "Edit", "Read", "Write"];
+  for (const tool of required) {
+    assert.ok(
+      ISOLATED_PROFILE.forceDisallowedTools.includes(tool),
+      `forceDisallowedTools must include "${tool}" to neutralize prompt-injection abuse`,
+    );
+  }
+});
+
 test("getProfile returns ISOLATED_PROFILE for 'isolated'", () => {
   const p = getProfile("isolated");
   assert.ok(p);
