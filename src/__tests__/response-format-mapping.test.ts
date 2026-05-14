@@ -1,0 +1,187 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { responseFormatToSystemPrompt, openaiToCli } from "../adapter/openai-to-cli.js";
+
+test("responseFormatToSystemPrompt: returns string for valid json_schema", () => {
+  const out = responseFormatToSystemPrompt({
+    type: "json_schema",
+    json_schema: {
+      name: "Facts",
+      schema: {
+        type: "object",
+        properties: { facts: { type: "array", items: { type: "string" } } },
+        required: ["facts"],
+      },
+      strict: true,
+    },
+  });
+  assert.ok(out, "should return non-empty string");
+  assert.match(out!, /MUST respond with ONLY valid JSON/);
+  assert.match(out!, /Schema name: Facts/);
+  assert.match(out!, /"properties":\{"facts"/);
+});
+
+test("responseFormatToSystemPrompt: includes schema serialized as JSON", () => {
+  const out = responseFormatToSystemPrompt({
+    type: "json_schema",
+    json_schema: { schema: { type: "object", properties: { x: { type: "number" } } } },
+  })!;
+  assert.match(out, /"type":"object"/);
+});
+
+test("responseFormatToSystemPrompt: returns undefined for missing input", () => {
+  assert.equal(responseFormatToSystemPrompt(undefined), undefined);
+  assert.equal(responseFormatToSystemPrompt(null), undefined);
+  assert.equal(responseFormatToSystemPrompt({}), undefined);
+});
+
+test("responseFormatToSystemPrompt: returns undefined for non-json_schema type", () => {
+  assert.equal(
+    responseFormatToSystemPrompt({ type: "text" }),
+    undefined,
+  );
+  assert.equal(
+    responseFormatToSystemPrompt({ type: "json_object" }),
+    undefined,
+  );
+});
+
+test("responseFormatToSystemPrompt: returns undefined when inner schema missing", () => {
+  assert.equal(
+    responseFormatToSystemPrompt({ type: "json_schema", json_schema: {} }),
+    undefined,
+  );
+  assert.equal(
+    responseFormatToSystemPrompt({
+      type: "json_schema",
+      json_schema: { name: "Test" },
+    }),
+    undefined,
+  );
+});
+
+test("responseFormatToSystemPrompt: returns undefined for empty schema object", () => {
+  assert.equal(
+    responseFormatToSystemPrompt({
+      type: "json_schema",
+      json_schema: { schema: {} },
+    }),
+    undefined,
+  );
+});
+
+test("responseFormatToSystemPrompt: returns undefined when input is array", () => {
+  assert.equal(responseFormatToSystemPrompt([]), undefined);
+});
+
+test("responseFormatToSystemPrompt: defaults schema-name to 'Response' when missing", () => {
+  const out = responseFormatToSystemPrompt({
+    type: "json_schema",
+    json_schema: { schema: { type: "object", properties: { x: {} } } },
+  })!;
+  assert.match(out, /Schema name: Response/);
+});
+
+test("responseFormatToSystemPrompt: truncates oversized schema with warning log", () => {
+  const huge = {
+    type: "object",
+    properties: Object.fromEntries(
+      Array.from({ length: 1000 }, (_, i) => [`field_${i}`, { type: "string", description: "x".repeat(50) }]),
+    ),
+  };
+  const out = responseFormatToSystemPrompt({
+    type: "json_schema",
+    json_schema: { name: "Huge", schema: huge },
+  })!;
+  // Output should still contain the prompt header
+  assert.match(out, /MUST respond with ONLY valid JSON/);
+  // But schema portion should be capped (we set 8 KB; total output is header + 8 KB).
+  assert.ok(out.length < 9_500, `expected truncated output, got ${out.length} bytes`);
+});
+
+test("responseFormatToSystemPrompt: handles deeply nested schema without crash", () => {
+  let nested: Record<string, unknown> = { type: "string" };
+  for (let i = 0; i < 100; i++) {
+    nested = { type: "object", properties: { nested } };
+  }
+  const out = responseFormatToSystemPrompt({
+    type: "json_schema",
+    json_schema: { schema: nested },
+  });
+  assert.ok(out);
+});
+
+test("openaiToCli with mapResponseFormat=true converts response_format to systemPrompt", () => {
+  const cli = openaiToCli(
+    {
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content: "test" }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "Result",
+          schema: { type: "object", properties: { ok: { type: "boolean" } } },
+        },
+      },
+    },
+    { mapResponseFormat: true },
+  );
+  assert.ok(cli.systemPrompt, "systemPrompt should be set");
+  assert.match(cli.systemPrompt!, /MUST respond with ONLY valid JSON/);
+  assert.match(cli.systemPrompt!, /Schema name: Result/);
+});
+
+test("openaiToCli WITHOUT mapResponseFormat ignores response_format (legacy behavior)", () => {
+  const cli = openaiToCli({
+    model: "claude-haiku-4-5",
+    messages: [{ role: "user", content: "test" }],
+    response_format: {
+      type: "json_schema",
+      json_schema: { schema: { type: "object" } },
+    },
+  });
+  assert.equal(cli.systemPrompt, undefined);
+});
+
+test("openaiToCli with mapResponseFormat=true overrides user-supplied system_prompt", () => {
+  const cli = openaiToCli(
+    {
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content: "test" }],
+      system_prompt: "USER OWN SYSTEM PROMPT",
+      response_format: {
+        type: "json_schema",
+        json_schema: { schema: { type: "object", properties: { a: { type: "string" } } } },
+      },
+    },
+    { mapResponseFormat: true },
+  );
+  assert.ok(cli.systemPrompt);
+  assert.doesNotMatch(cli.systemPrompt!, /USER OWN SYSTEM PROMPT/);
+  assert.match(cli.systemPrompt!, /MUST respond with ONLY valid JSON/);
+});
+
+test("openaiToCli with mapResponseFormat=true preserves system_prompt when no response_format", () => {
+  const cli = openaiToCli(
+    {
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content: "test" }],
+      system_prompt: "KEEP THIS",
+    },
+    { mapResponseFormat: true },
+  );
+  assert.equal(cli.systemPrompt, "KEEP THIS");
+});
+
+test("openaiToCli with mapResponseFormat=true preserves system_prompt when response_format is text-type", () => {
+  const cli = openaiToCli(
+    {
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content: "test" }],
+      system_prompt: "KEEP THIS",
+      response_format: { type: "text" },
+    },
+    { mapResponseFormat: true },
+  );
+  assert.equal(cli.systemPrompt, "KEEP THIS");
+});
