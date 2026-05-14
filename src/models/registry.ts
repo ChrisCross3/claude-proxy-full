@@ -34,13 +34,16 @@ export interface ClaudeModelDefinition {
 
 export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
   {
+    // Opus 4.7 has a native 1M context window — no beta header required
+    // (Anthropic flipped this from gated Q1 2026 to standard). Variants
+    // pathway preserved for 4.6 models that still need context-1m-2025-08-07.
     id: 'claude-opus-4-7',
     name: 'Claude Opus 4.7',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
     maxOutputTokens: 8192,
     effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     thinkingSupported: true,
-    oneMillionContextVariant: true,
+    oneMillionContextVariant: false,
     aliases: [
       'opus',
       'best',
