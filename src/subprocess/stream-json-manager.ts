@@ -22,6 +22,7 @@
 import { spawn, ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import { randomUUID } from "crypto";
+import { resolveCwd, resolveEnv } from "./manager.js";
 import type {
   ClaudeCliMessage,
   ClaudeCliAssistant,
@@ -145,6 +146,10 @@ export interface StreamJsonOptions {
   jsonSchema?: Record<string, unknown>;
   /** Cap agentic turns (print-mode only). Not in fingerprint. */
   maxTurns?: number;
+  /** Inject Anthropic OAuth token as ANTHROPIC_API_KEY env var (for --bare spawns). */
+  injectOAuthEnv?: boolean;
+  /** Spawn with cwd=os.tmpdir() to prevent CLAUDE.md walk-up discovery. */
+  isolateCwd?: boolean;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -314,10 +319,13 @@ export class StreamJsonSubprocess extends EventEmitter {
 
     this.model = options.model;
 
+    const spawnCwd = resolveCwd(options);
+    const spawnEnv = await resolveEnv(options);
+
     return new Promise((resolve, reject) => {
       this.process = spawn("claude", args, {
-        cwd: options.cwd || process.cwd(),
-        env: { ...process.env, OPENCLAW_PROXY: "1" },
+        cwd: spawnCwd,
+        env: spawnEnv,
         stdio: ["pipe", "pipe", "pipe"],
       });
       this.spawnedAt = Date.now();
