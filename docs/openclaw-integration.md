@@ -41,7 +41,7 @@ Example:
             "name": "Claude Opus 4.7 (via claude-proxy)",
             "api": "openai-completions",
             "input": ["text"],
-            "contextWindow": 200000,
+            "contextWindow": 1000000,
             "maxTokens": 8192
           },
           {
