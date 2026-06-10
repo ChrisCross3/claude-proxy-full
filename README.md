@@ -1,62 +1,45 @@
-# openclaw-claude-proxy
+# claude-proxy-full
 
-`openclaw-claude-proxy` exposes the official Claude Code CLI as a local OpenAI-compatible HTTP server. It lets OpenAI-compatible clients talk to a local `claude` CLI session using familiar `/v1/chat/completions`, `/v1/responses`, `/v1/models`, streaming, usage, health, metrics, and tracing endpoints.
+`claude-proxy-full` stellt die offizielle Claude-Code-CLI als lokalen, OpenAI-kompatiblen HTTP-Server bereit. Jeder Client, der die OpenAI-API spricht, kann darauf zeigen — beantwortet werden die Requests von einer lokalen `claude`-Session, authentifiziert über dein bestehendes **Claude-Abo (OAuth)**, ganz ohne Anthropic-API-Key.
 
-The installed executable is `claude-proxy` (from `package.json` `bin`). In this fork, the recommended systemd-user deployment uses the unit name `claude-proxy-full.service` to distinguish it from any upstream `mehdic/openclaw-claude-proxy` install running side-by-side. The proxy is designed for local developer and automation setups, especially [OpenClaw](https://github.com/openclaw/openclaw), but it also works with SDKs and tools that can point at an OpenAI-compatible base URL.
+Dies ist ein gehärteter Fork von [`mehdic/openclaw-claude-proxy`](https://github.com/mehdic/openclaw-claude-proxy) (seinerseits auf `mnemon-dev/claude-max-api-proxy` aufbauend). Zusätzlich zum OpenAI-kompatiblen Server des Upstreams bringt dieser Fork eine kuratierte **Model-Registry** (inkl. 1M-Context-Opus), einen **isolierten Single-Shot-Endpoint** für Memory-/Agent-Backends wie [Honcho](https://github.com/plastic-labs/honcho) sowie einen **OpenRouter-Wire-Kompatibilitäts-Layer**, damit auch Clients, die nur den OpenRouter-Dialekt sprechen, unverändert funktionieren.
 
-> **OAuth safety: `openclaw-claude-proxy` does not extract, read, copy, export, or store Claude Code OAuth tokens. It launches the official `claude` CLI in the background and lets Claude Code handle authentication the normal way. In other words, the proxy uses Claude Code as Anthropic expects it to be used, instead of scraping credentials or reimplementing Anthropic's login flow.**
+> **OAuth-Sicherheit:** Dieser Proxy **extrahiert, kopiert, exportiert** den Claude-Code-Login **nicht** und bildet ihn auch nicht nach. Er startet die offizielle `claude`-CLI und überlässt ihr die Authentifizierung auf die normale Weise. Das einzige gelesene Credential ist die nutzereigene `~/.claude/.credentials.json` — und auch nur, um einen Access-Token in `--bare`-Isolated-Spawns zu überbrücken (siehe [Isolated-Mode](#isolated-mode)). Geschrieben wird nichts.
 
-## Highlights
+## Auf einen Blick
 
-- OpenAI-compatible Chat Completions and practical Responses API support.
-- Persistent `stream-json` runtime by default, plus `print` fallback mode.
-- SSE streaming and keepalives for long-running Claude Code turns.
-- Usage/cache metadata and estimated cost annotations.
-- Caller-dispatched OpenAI tool call bridge.
-- Optional direct MCP injection for advanced local setups.
-- Optional n8n-aware progress keepalives.
-- Optional in-memory, SQLite, and HTTP-exported traces with redaction boundaries.
-- Optional sticky Claude CLI sessions for callers that pass deterministic session metadata.
-- macOS LaunchAgent-friendly standalone server.
+- OpenAI-kompatible **Chat Completions** und eine praxistaugliche **Responses**-API, jeweils mit und ohne `/v1`-Prefix.
+- Authentifizierung über dein **Claude-Abo** — der Proxy braucht keinen eigenen API-Key.
+- Persistente `stream-json`-Runtime mit Init-/Session-Pools für niedrige Latenz und Prompt-Cache-Reuse; `print`-Fallback-Mode zur Isolation.
+- SSE-Streaming mit Keepalives für lange Claude-Code-Turns.
+- **Model-Registry** mit kanonischen IDs, Aliassen, Context-Windows und Kosten-Metadaten (`claude-opus-4-7` meldet ein **1.000.000-Token**-Context-Window).
+- **`/v1/isolated/chat/completions`** — zustandslose `--bare`-Single-Shot-Calls mit Strict-JSON-Freundlichkeit, gebaut für externe Memory-Backends (Honcho-artige Deriver).
+- **OpenRouter-Kompatibilität** — akzeptiert `anthropic/<model>`-IDs und `extra_body.reasoning`, normalisiert sie in die OpenAI-Form.
+- Usage-/Cache-Metadaten und geschätzte Kosten-Annotationen.
+- Caller-dispatched OpenAI-Tool-Call-Bridge, optional mit direkter MCP-Injection.
+- Optionale In-Memory-/SQLite-/HTTP-exportierte Traces mit Redaction-Grenzen.
+- Optionale Sticky-Claude-CLI-Sessions für Caller, die deterministische Session-Metadaten mitschicken.
 
-## Quick start
+## Schnellstart
 
-First install and authenticate Claude Code:
+Zuerst Claude Code installieren und einloggen:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
-claude auth login
+claude /login        # mit deinem Claude-Abo anmelden
 ```
 
-Then install the published npm package, or use one of the alternative paths below.
-
-### Option A: install from npm
+Dann den Proxy aus dem Source bauen und starten:
 
 ```bash
-npm install -g openclaw-claude-proxy
-claude-proxy
-```
-
-The executable command remains `claude-proxy`. The npm package includes the compiled `dist/` output, so users do not need TypeScript or `npm run build`.
-
-GitHub release tarball alternative:
-
-```bash
-npm install -g https://github.com/mehdic/openclaw-claude-proxy/releases/download/v1.0.8/openclaw-claude-proxy-1.0.8.tgz
-claude-proxy
-```
-
-### Option B: build from source
-
-```bash
-git clone https://github.com/mehdic/openclaw-claude-proxy.git
-cd openclaw-claude-proxy
+git clone https://github.com/ChrisCross3/claude-proxy-full.git
+cd claude-proxy-full
 npm install
 npm run build
-npm start
+npm start            # lauscht auf 127.0.0.1:3456
 ```
 
-In another terminal:
+Smoke-Test in einem zweiten Terminal:
 
 ```bash
 curl http://127.0.0.1:3456/health
@@ -70,79 +53,98 @@ curl http://127.0.0.1:3456/v1/chat/completions \
   }'
 ```
 
-No proxy API key is required by default. Authentication is whatever the local `claude` CLI has already established. Opt-in Bearer-token auth, CORS whitelisting, and a cold-spawn rate limit are available — see the [Security / Hardening](docs/configuration.md#security--hardening) section of the configuration guide.
+Standardmäßig ist kein Proxy-API-Key nötig — die Authentifizierung ist das, was die lokale `claude`-CLI bereits etabliert hat. Lass den Server an Loopback gebunden, solange du nicht eigene Auth (`CLAUDE_PROXY_API_KEY`/`CLAUDE_PROXY_API_KEYS`) und Netzwerk-Kontrollen ergänzt.
 
-## Documentation
+## API-Oberfläche
 
-- [Setup guide](docs/setup.md) — install, run, smoke-test, macOS LaunchAgent, updates, and troubleshooting.
-- [Configuration guide](docs/configuration.md) — runtime modes, environment variables, tracing, MCP, n8n, monitoring, and local secret handling.
-- [OpenClaw integration guide](docs/openclaw-integration.md) — provider/model/agent configuration, sticky-session bridge setup, tool modes, and safety notes.
-- [Trace security](docs/TRACE_SECURITY.md) — trace contents, redaction, access controls, and retention.
-- [macOS LaunchAgent reference](docs/macos-setup.md) — focused plist example.
+Routen sind mit und ohne `/v1` gemountet, damit sowohl OpenAI-SDKs als auch einfachere Clients funktionieren.
 
-## API surface
-
-Routes are mounted with and without `/v1` where relevant so both OpenAI SDKs and simpler clients can use the server.
-
-| Endpoint | Method | Purpose |
+| Endpoint | Methode | Zweck |
 | --- | --- | --- |
-| `/health` | GET | Cheap liveness and runtime capability summary. |
-| `/healthz/deep` | GET | Deep probe that asks Claude for a tiny response. |
-| `/models`, `/v1/models` | GET | OpenAI-style model list. |
-| `/chat/completions`, `/v1/chat/completions` | POST | Chat Completions, streaming and non-streaming. |
-| `/responses`, `/v1/responses` | POST | Practical Responses API compatibility. |
-| `/pricing`, `/v1/pricing` | GET | Pricing snapshot used for cost estimates. |
-| `/metrics` | GET | Prometheus-style metrics. |
-| `/traces`, `/traces/:id` | GET | Localhost-only trace endpoints when tracing is enabled. |
+| `/health` | GET | Günstiger Liveness- + Runtime-Capability-Überblick. |
+| `/healthz/deep` | GET | Tiefe Probe, die Claude um eine Mini-Antwort bittet. |
+| `/models`, `/v1/models` | GET | OpenAI-Style-Model-Liste aus der Registry. |
+| `/chat/completions`, `/v1/chat/completions` | POST | Chat Completions, streaming und non-streaming. |
+| `/isolated/chat/completions`, `/v1/isolated/chat/completions` | POST | Zustandslose `--bare`-Single-Shot-Completions (non-streaming). |
+| `/responses`, `/v1/responses` | POST | Praxistaugliche Responses-API-Kompatibilität. |
+| `/pricing`, `/v1/pricing` | GET | Pricing-Snapshot für Kostenschätzungen. |
+| `/metrics` | GET | Prometheus-Style-Metriken. |
+| `/traces`, `/traces/:id` | GET | Localhost-only Trace-Endpoints, wenn Tracing aktiv ist. |
 
-## Runtime model
+## Modelle
 
-Two Claude subprocess strategies are available:
+Die Registry stellt kanonische Model-IDs plus Komfort-Aliasse bereit (`anthropic/…`, `claude-proxy/…`, `claude-code-cli/…` sowie datierte Varianten).
 
-- `stream-json` — default. Uses Claude Code's stream-json transport, init pool, and session pool for better latency and prompt-cache reuse.
-- `print` — incident-response fallback. Spawns a fresh `claude --print` subprocess per request. Slower, but simpler and isolated.
+| Model-ID | Context-Window | Anmerkung |
+| --- | --- | --- |
+| `claude-opus-4-7` | 1.000.000 | Natives 1M-Context. |
+| `claude-opus-4-6` | 200.000 | |
+| `claude-sonnet-4-6` | 200.000 | |
+| `claude-haiku-4-5` | 200.000 | Kanonische ID; `claude-haiku-4-5-20251001` bleibt als Alias. |
 
-See [Configuration](docs/configuration.md#runtime) for details.
+`GET /v1/models` liefert die Live-Liste. Pricing-/Kosten-Metadaten werden in der Registry gepflegt und über die Pricing-Skripte aktualisiert.
 
-## Sticky sessions
+## Isolated-Mode
 
-Sticky sessions are an opt-in extension on top of the normal OpenAI-compatible API. A request with no sticky metadata keeps the default pool behavior. A caller that wants stable live Claude CLI continuity sends deterministic session headers:
+`POST /v1/isolated/chat/completions` ist ein **zustandsloser Single-Shot**-Pfad für Memory- und Agent-Backends, die viele kleine, unabhängige Extraktions-Calls absetzen — etwa die Deriver-/Summary-/Dialectic-Module von [Honcho](https://github.com/plastic-labs/honcho).
+
+Im Vergleich zum normalen Chat-Endpoint:
+
+- spawnt er die Claude-CLI mit `--bare` (kein Workspace, keine Auto-Memory, kein `CLAUDE.md`-Walk-up-Discovery; `cwd` ist ein Temp-Verzeichnis),
+- überbrückt er den Abo-OAuth-Token aus `~/.claude/.credentials.json` in `ANTHROPIC_API_KEY` für diesen `--bare`-Spawn (weil `--bare` weder OAuth noch OS-Keychain liest),
+- ist er freundlich zu `response_format: json_schema`-Requests (das Schema wird in einen aggressiven System-Prompt eingebettet, sodass Caller striktes JSON zurückbekommen),
+- ist er **non-streaming** — für SSE den Endpoint `/v1/chat/completions` nutzen.
+
+Relevante Env-Vars: `CLAUDE_PROXY_BARE_POOL`, `CLAUDE_PROXY_BARE_POOL_SIZE`, `CLAUDE_PROXY_ISOLATED_CWD`.
+
+### Embeddings sind außerhalb des Scopes
+
+Claude hat **keine Embedding-API**, dieser Proxy kann also kein `/v1/embeddings` bedienen. Memory-Backends, die einen Vector-Store brauchen (Honcho et al.), müssen ihren Embedding-Transport auf einen separaten, OpenAI-kompatiblen Provider zeigen lassen — eine lokale [Ollama](https://ollama.com)-Instanz mit `nomic-embed-text` (768-dim) funktioniert gut. Wichtig: Den Vector-Store auf die Dimensionalität des Embedders konfigurieren, nicht auf OpenAIs Default von 1536.
+
+## OpenRouter-Kompatibilität
+
+Manche Clients (z. B. das OpenRouter-Provider-Profil von OpenRouter-client) emittieren ausschließlich den OpenRouter-Wire-Dialekt: Model-IDs tragen einen `anthropic/`-Prefix, Reasoning-Optionen liegen unter `extra_body.reasoning`. Registriert man den Proxy als OpenRouter-artigen Provider (eine `base_url`, die `openrouter` enthält, etwa via Hosts-Alias), konvertiert der Normalisierungs-Layer die Requests transparent in die OpenAI-Form, die der Rest des Proxys erwartet:
+
+- `anthropic/claude-opus-4-7` → `claude-opus-4-7`
+- `extra_body.reasoning.effort` → top-level `reasoning_effort`
+- `extra_body.reasoning.enabled === false` / `effort === "none"` → top-level `thinking = false`
+
+Bestehende Top-Level-Felder werden nie überschrieben (direkte OpenAI-Style-Calls haben Vorrang), und die Transformation ist idempotent. Ein Dummy-Key wie `sk-or-dummy` befriedigt Clients, die auf einem Key bestehen.
+
+## Runtime-Modell
+
+Zwei Claude-Subprozess-Strategien:
+
+- `stream-json` *(Default)* — Claude Codes stream-json-Transport mit Init-/Session-Pools für Latenz und Prompt-Cache-Reuse.
+- `print` — Incident-Response-Fallback: ein frischer `claude --print`-Subprozess pro Request. Langsamer, einfacher, isoliert.
+
+Auswahl über `CLAUDE_PROXY_RUNTIME` / `CLAUDE_PROXY_STREAM_JSON`. Die vollständige Env-Var-Referenz (Pools, Tracing, MCP, Monitoring, Secret-Handling) steht in [docs/configuration.md](docs/configuration.md).
+
+## Sticky-Sessions
+
+Opt-in-Erweiterung für Caller, die einen warmen, kontinuierlichen Live-Claude-CLI-Worker wollen. Ein Request ohne Sticky-Metadaten behält das Default-Pool-Verhalten; ein Caller pinnt eine Session über deterministische Header:
 
 ```text
-X-Claude-Proxy-Session-Key: <caller-chosen-stable-id>
+X-Claude-Proxy-Session-Key: <vom Caller gewählte, stabile ID>
 X-Claude-Proxy-Session-Mode: sticky
 X-Claude-Proxy-Session-TTL-Seconds: 86400
-X-Claude-Proxy-Session-Policy: compatible
 ```
 
-Equivalent body options are also supported under `claude_proxy` when body options are enabled. The proxy hashes the raw key for logs/metrics; do not put secrets in the key.
+Serverseitig aktivieren mit `CLAUDE_PROXY_STICKY_SESSIONS=1` (plus `CLAUDE_PROXY_STICKY_MAX_SESSIONS`, `CLAUDE_PROXY_STICKY_DEFAULT_TTL_SECONDS`). Der rohe Key wird für Logs/Metriken gehasht — niemals Secrets hineinlegen.
 
-Enable the server-side feature explicitly:
+## Tool-Ausführungs-Modell
 
-```bash
-CLAUDE_PROXY_STICKY_SESSIONS=1
-CLAUDE_PROXY_STICKY_MAX_SESSIONS=8
-CLAUDE_PROXY_STICKY_DEFAULT_TTL_SECONDS=86400
-```
+Der sichere Default sind **Caller-dispatched Tools**: Der Proxy gibt OpenAI-Style-`tool_calls` zurück, und der Caller besitzt Ausführung, Approval und Audit. Optionale MCP-Injection (`CLAUDE_PROXY_TOOLS_TRANSLATION=1`, eingegrenzt über `CLAUDE_PROXY_MCP_ALLOW`/`CLAUDE_PROXY_MCP_DENY`) registriert MCP-Server direkt an der inneren Claude-CLI — bequem für lokale Automation, verschiebt aber die Sicherheitsgrenze in den Proxy hinein. Diesen Trade-off verstehen, bevor man es aktiviert.
 
-For OpenClaw, use the local `claude-proxy-sticky` provider plugin plus the OpenAI-compatible Gateway patches described in [OpenClaw integration](docs/openclaw-integration.md#4-sticky-sessions-for-openclaw). Mehdi's installed-Gateway patch ledger lives at `/Users/mehdichaouachi/.openclaw/workspace/memory/infra/openclaw-gateway-patches.md`. OpenClaw remains the transcript source of truth; sticky sessions only keep the live Claude CLI worker warm/continuous for the chosen session key.
+## Sicherheitshinweise
 
-## Tool execution model
+- Die Authentifizierung bleibt bei der offiziellen `claude`-CLI; der Proxy persistiert keine Tokens.
+- Server auf Loopback halten, solange keine eigene Auth + Netzwerk-Kontrollen ergänzt sind.
+- Keine API-Keys, OAuth-Tokens, lokalen Pfade oder Trace-Datenbanken committen (`.env`, Logs und `dist/` sind git-ignored).
+- Traces als sensible Diagnose-Daten behandeln, auch wenn secret-artige Felder redacted werden.
+- `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true` nur für vertrauenswürdige Headless-/Local-Deployments.
 
-The safer default is caller-dispatched tools: the caller owns tool execution, approval, audit, and allowlists. The proxy can return OpenAI-style `tool_calls` so the caller can execute tools and send back tool results.
-
-Optional MCP injection (`CLAUDE_PROXY_TOOLS_TRANSLATION=1`) registers selected MCP servers directly with the inner Claude CLI. This is useful for local automation but changes the security boundary: the inner Claude CLI executes those MCP tools directly, outside the caller's dispatcher. See [OpenClaw tool modes](docs/openclaw-integration.md#tool-modes) before enabling it.
-
-## Security notes
-
-- **OAuth safety: this proxy does not extract or store Claude Code OAuth tokens. Authentication remains owned by the official `claude` CLI and its normal local auth state.**
-- Keep the server bound to loopback unless you add your own authentication and network controls.
-- Do not commit API keys, OAuth tokens, local paths, LaunchAgent plists containing secrets, or trace databases.
-- Prefer environment variables, OS secret stores, or OpenClaw secret references for local secrets.
-- Treat traces as sensitive diagnostic data even though the proxy redacts secret-looking fields.
-- Use `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true` only for trusted headless/local service deployments where you accept the Claude CLI permission trade-off.
-
-## Development
+## Entwicklung
 
 ```bash
 npm install
@@ -150,7 +152,7 @@ npm run build
 npm test
 ```
 
-Optional checks when a proxy is already running:
+Live-Checks gegen einen laufenden Proxy:
 
 ```bash
 npm run soak:quick
@@ -160,19 +162,10 @@ npm run failure:sim
 npm run monitor:live
 ```
 
-## Fork lineage
+## Fork-Herkunft
 
-Lineage chain: `mnemon-dev/claude-max-api-proxy` → `mehdic/openclaw-claude-proxy` → `ChrisCross3/claude-proxy-full` (this repository).
+`ChrisCross3/claude-proxy-full` → [`mehdic/openclaw-claude-proxy`](https://github.com/mehdic/openclaw-claude-proxy) → `mnemon-dev/claude-max-api-proxy`. Dieser Fork ergänzt die Model-Registry (inkl. 1M-Context-Opus), den `/v1/isolated`-Endpoint und den OpenRouter-Kompatibilitäts-Layer — neben der persistenten Runtime, dem Tracing, Monitoring und Tooling des Upstreams.
 
-`mnemon-dev/claude-max-api-proxy` provided the original Claude-Code-as-OpenAI-proxy idea. `mehdic/openclaw-claude-proxy` extended it with OpenClaw-oriented compatibility, persistent runtime hardening, tracing, monitoring, tool handling, and operational documentation. This fork (`ChrisCross3/claude-proxy-full`) adds Welle-3 features on top:
+## Lizenz
 
-- **Model registry + strict adapter** — per-model context-window registry, `ModelValidationError` → HTTP 400 instead of silent default-fallback for unknown models.
-- **Per-request CLI flag passthrough** — `reasoning_effort` → `--effort`, `thinking`, `debug`, `permission_mode`, `system_prompt`/`append_system_prompt`, `agent`/`agents`, `max_budget_usd`, `max_turns`, `bare`, `disable_slash_commands`, `json_schema`. Wired through types → adapter → spawner pool → pool fingerprint so distinct flag combinations get distinct warm workers.
-- **OpenRouter masking** — `src/adapter/openrouter-normalize.ts` strips the `anthropic/` model prefix and lifts `reasoning` (top-level *or* `extra_body`) so callers configured for OpenRouter (e.g. OpenRouter-client) can drive the proxy unchanged.
-- **Opt-in security middleware** — Bearer-token auth, CORS origin whitelist, cold-spawn token-bucket rate limit (see [Security / Hardening](docs/configuration.md#security--hardening)).
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full Welle-3 design, including the spawner pipeline and pool-fingerprint model.
-
-## License
-
-MIT
+MIT — siehe [LICENSE](LICENSE).
