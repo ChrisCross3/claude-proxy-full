@@ -1,8 +1,8 @@
 /**
  * OpenRouter-Wire Normalisierung.
  *
- * Der Proxy wird OpenRouter-client gegenueber als OpenRouter-kompatibler Endpoint
- * registriert (base_url enthaelt "openrouter"). OpenRouter-client' OpenRouter-Profil
+ * Der Proxy wird einem OpenRouter-Client gegenueber als OpenRouter-kompatibler Endpoint
+ * registriert (base_url enthaelt "openrouter"). Dessen OpenRouter-Profil
  * sendet daraufhin Modelle mit "anthropic/"-Prefix und packt den
  * reasoning_config-Dict in extra_body.reasoning.
  *
@@ -53,7 +53,7 @@ export function normalizeOpenRouterRequest(req: AnyRecord): void {
     req.model = stripOpenRouterPrefix(req.model);
   }
 
-  // OpenRouter-client sends reasoning as a top-level field (OpenAI-Responses-style);
+  // Such clients send reasoning as a top-level field (OpenAI-Responses-style);
   // OpenRouter docs also accept extra_body.reasoning. Support both, prefer top-level.
   const extra = req.extra_body;
   const reasoning =

@@ -6,7 +6,7 @@
  *   - CLAUDE_PROXY_API_KEYS (comma-separated, for rotation).
  *
  * When neither is set, this middleware is a no-op — preserving the
- * default "no-auth" posture used by OpenRouter-client/curl against the local proxy.
+ * default "no-auth" posture used by local clients/curl against the local proxy.
  *
  * When at least one key is configured, every request must carry a
  * matching `Authorization: Bearer <token>` header. Comparison is

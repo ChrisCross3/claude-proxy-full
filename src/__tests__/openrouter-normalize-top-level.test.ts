@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeOpenRouterRequest } from '../adapter/openrouter-normalize.js';
 
-test('normalize: top-level reasoning.effort lifts to reasoning_effort (OpenRouter-client wire form)', () => {
+test('normalize: top-level reasoning.effort lifts to reasoning_effort (OpenRouter wire form)', () => {
   const req: any = {
     model: 'anthropic/claude-opus-4-7',
     reasoning: { enabled: true, effort: 'xhigh' },

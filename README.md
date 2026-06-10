@@ -11,7 +11,7 @@ Dies ist ein gehärteter Fork von [`mehdic/openclaw-claude-proxy`](https://githu
 Der Upstream `openclaw-claude-proxy` ist auf das OpenClaw-Ökosystem zugeschnitten. Dieser Fork ergänzt drei Dinge, die ihn für Drittanbieter-Clients und Memory-Backends einsetzbar machen:
 
 - **`/v1/isolated`-Endpoint.** Der Upstream kennt nur den normalen, kontextbehafteten Chat-Pfad. Memory-Backends wie Honcho setzen aber sehr viele kleine, voneinander unabhängige Extraktions-Calls ab und brauchen striktes JSON zurück. Der Isolated-Endpoint liefert das: `--bare`-Spawn ohne Workspace-/Memory-/`CLAUDE.md`-Discovery, OAuth-Token-Bridging für den `--bare`-Mode und `json_schema`-Handling. Ohne ihn lief Honcho gegen den Upstream nicht zuverlässig.
-- **OpenRouter-Wire-Kompatibilität.** Manche Clients (z. B. OpenRouter-client) sprechen nur den OpenRouter-Dialekt — `anthropic/`-Prefix an der Model-ID, Reasoning unter `extra_body.reasoning`. Der Upstream akzeptiert nur die OpenAI-Form. Der Normalisierungs-Layer übersetzt das transparent, sodass solche Clients ohne Patch funktionieren.
+- **OpenRouter-Wire-Kompatibilität.** Manche Clients sprechen nur den OpenRouter-Dialekt — `anthropic/`-Prefix an der Model-ID, Reasoning unter `extra_body.reasoning`. Der Upstream akzeptiert nur die OpenAI-Form. Der Normalisierungs-Layer übersetzt das transparent, sodass solche Clients ohne Patch funktionieren.
 - **Gepflegte Model-Registry.** Kanonische Model-IDs mit Context-Windows und Kosten-Metadaten an einer Stelle, inkl. `claude-opus-4-7` mit nativem 1M-Context-Window und stabilen Aliassen für datierte/präfixierte Varianten.
 
 Die Runtime-Basis (Pools, Streaming, Tracing, Tooling, Sticky-Sessions) stammt unverändert aus dem Upstream — dort liegt die eigentliche Schwerarbeit, und sie wird hier nur erweitert, nicht ersetzt.
@@ -113,7 +113,7 @@ Claude hat **keine Embedding-API**, dieser Proxy kann also kein `/v1/embeddings`
 
 ## OpenRouter-Kompatibilität
 
-Manche Clients (z. B. das OpenRouter-Provider-Profil von OpenRouter-client) emittieren ausschließlich den OpenRouter-Wire-Dialekt: Model-IDs tragen einen `anthropic/`-Prefix, Reasoning-Optionen liegen unter `extra_body.reasoning`. Registriert man den Proxy als OpenRouter-artigen Provider (eine `base_url`, die `openrouter` enthält, etwa via Hosts-Alias), konvertiert der Normalisierungs-Layer die Requests transparent in die OpenAI-Form, die der Rest des Proxys erwartet:
+Manche Clients (z. B. ein OpenRouter-Provider-Profil) emittieren ausschließlich den OpenRouter-Wire-Dialekt: Model-IDs tragen einen `anthropic/`-Prefix, Reasoning-Optionen liegen unter `extra_body.reasoning`. Registriert man den Proxy als OpenRouter-artigen Provider (eine `base_url`, die `openrouter` enthält, etwa via Hosts-Alias), konvertiert der Normalisierungs-Layer die Requests transparent in die OpenAI-Form, die der Rest des Proxys erwartet:
 
 - `anthropic/claude-opus-4-7` → `claude-opus-4-7`
 - `extra_body.reasoning.effort` → top-level `reasoning_effort`

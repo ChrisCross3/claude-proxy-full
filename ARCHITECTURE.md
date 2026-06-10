@@ -80,7 +80,7 @@ Streaming / sticky:
 
 ## Tests
 
-33 Test-Files unter `src/__tests__/` (Node-`node:test`). Test-Bilanz auf der OpenRouter-client-VM (`npm test`): **429 Tests / 427 pass / 2 skip / 0 fail**.
+33 Test-Files unter `src/__tests__/` (Node-`node:test`). Test-Bilanz (`npm test`): **429 Tests / 427 pass / 2 skip / 0 fail**.
 
 ## Weiterführend
 

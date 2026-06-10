@@ -8,7 +8,7 @@
  *       is set; otherwise we emit a startup warning and treat the whitelist
  *       as empty.
  *   - Default (env unset): no CORS headers are added. Server-to-server
- *     clients without an Origin header (OpenRouter-client/curl) are unaffected.
+ *     clients without an Origin header (local tools/curl) are unaffected.
  *   - When an Origin header is present and matches the whitelist, we set
  *     Access-Control-Allow-Origin to the exact request origin (no `*`
  *     unless explicitly opted in and authenticated) plus the usual
