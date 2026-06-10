@@ -6,6 +6,16 @@ Dies ist ein gehärteter Fork von [`mehdic/openclaw-claude-proxy`](https://githu
 
 > **OAuth-Sicherheit:** Dieser Proxy **extrahiert, kopiert, exportiert** den Claude-Code-Login **nicht** und bildet ihn auch nicht nach. Er startet die offizielle `claude`-CLI und überlässt ihr die Authentifizierung auf die normale Weise. Das einzige gelesene Credential ist die nutzereigene `~/.claude/.credentials.json` — und auch nur, um einen Access-Token in `--bare`-Isolated-Spawns zu überbrücken (siehe [Isolated-Mode](#isolated-mode)). Geschrieben wird nichts.
 
+## Gegenüber dem Upstream
+
+Der Upstream `openclaw-claude-proxy` ist auf das OpenClaw-Ökosystem zugeschnitten. Dieser Fork ergänzt drei Dinge, die ihn für Drittanbieter-Clients und Memory-Backends einsetzbar machen:
+
+- **`/v1/isolated`-Endpoint.** Der Upstream kennt nur den normalen, kontextbehafteten Chat-Pfad. Memory-Backends wie Honcho setzen aber sehr viele kleine, voneinander unabhängige Extraktions-Calls ab und brauchen striktes JSON zurück. Der Isolated-Endpoint liefert das: `--bare`-Spawn ohne Workspace-/Memory-/`CLAUDE.md`-Discovery, OAuth-Token-Bridging für den `--bare`-Mode und `json_schema`-Handling. Ohne ihn lief Honcho gegen den Upstream nicht zuverlässig.
+- **OpenRouter-Wire-Kompatibilität.** Manche Clients (z. B. OpenRouter-client) sprechen nur den OpenRouter-Dialekt — `anthropic/`-Prefix an der Model-ID, Reasoning unter `extra_body.reasoning`. Der Upstream akzeptiert nur die OpenAI-Form. Der Normalisierungs-Layer übersetzt das transparent, sodass solche Clients ohne Patch funktionieren.
+- **Gepflegte Model-Registry.** Kanonische Model-IDs mit Context-Windows und Kosten-Metadaten an einer Stelle, inkl. `claude-opus-4-7` mit nativem 1M-Context-Window und stabilen Aliassen für datierte/präfixierte Varianten.
+
+Die Runtime-Basis (Pools, Streaming, Tracing, Tooling, Sticky-Sessions) stammt unverändert aus dem Upstream — dort liegt die eigentliche Schwerarbeit, und sie wird hier nur erweitert, nicht ersetzt.
+
 ## Auf einen Blick
 
 - OpenAI-kompatible **Chat Completions** und eine praxistaugliche **Responses**-API, jeweils mit und ohne `/v1`-Prefix.

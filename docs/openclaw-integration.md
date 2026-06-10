@@ -178,7 +178,7 @@ Enable the plugin in OpenClaw config:
   "plugins": {
     "load": {
       "paths": [
-        "/Users/mehdichaouachi/.openclaw/plugins/claude-proxy-sticky"
+        "~/.openclaw/plugins/claude-proxy-sticky"
       ]
     },
     "allow": [
@@ -198,7 +198,7 @@ Enable the plugin in OpenClaw config:
 }
 ```
 
-If your install uses the persisted plugin registry, ensure `~/.openclaw/plugins/installs.json` contains the local `claude-proxy-sticky` entry. In Mehdi's deployment this was refreshed directly in the registry file.
+If your install uses the persisted plugin registry, ensure `~/.openclaw/plugins/installs.json` contains the local `claude-proxy-sticky` entry. In the reference deployment this was refreshed directly in the registry file.
 
 ### 4.3 Ensure OpenClaw's OpenAI-compatible transport forwards turn headers
 
@@ -210,10 +210,10 @@ For `claude-proxy` configured as `api: "openai-completions"`, patch or upgrade O
 2. passes `turnState.headers` into the OpenAI client default headers;
 3. does **not** add sticky metadata to the JSON payload unless you intentionally choose the body extension.
 
-Mehdi's local Gateway patch ledger, including Cassius's OpenAI Completions turn-header patch and Reaper's later boundary-aware stream-selection patch for `streamStrategy: session-custom`, is documented at:
+The reference local Gateway patch ledger, including an OpenAI Completions turn-header patch and a later boundary-aware stream-selection patch for `streamStrategy: session-custom`, is documented at:
 
 ```text
-/Users/mehdichaouachi/.openclaw/workspace/memory/infra/openclaw-gateway-patches.md
+~/.openclaw/workspace/memory/infra/openclaw-gateway-patches.md
 ```
 
 Without both Gateway behaviors, the plugin can calculate sticky headers but live OpenClaw traffic may still reach `claude-proxy` as ordinary pooled OpenAI-compatible calls.

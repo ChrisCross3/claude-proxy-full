@@ -3,7 +3,7 @@
 **Status:** Ready for implementation planning  
 **Date:** 2026-05-09  
 **Owner:** Claude Proxy maintainers  
-**Repository:** `/Users/mehdichaouachi/.openclaw/projects/claude-proxy`  
+**Repository:** `~/.openclaw/projects/claude-proxy`  
 **Primary docs:** `docs/prd/sticky-sessions.md`, `docs/superpowers/plans/2026-05-09-sticky-claude-sessions.md`  
 **Target transport:** `stream-json` only for sticky process reuse; `print` remains request-scoped.
 
@@ -25,7 +25,7 @@ Add a generic, opt-in sticky-session extension to Claude Proxy so callers can re
 
 ## Non-Goals
 
-- Do not hard-code OpenClaw, Sevro, Cassius, Reaper, or any named agent into Claude Proxy behavior.
+- Do not hard-code any specific host application or named agent into Claude Proxy behavior.
 - Do not require OpenClaw-specific headers for the feature to work.
 - Do not change default `/v1/chat/completions` semantics for standard OpenAI clients.
 - Do not claim Anthropic server-side prompt cache stays hot for 24 hours. A 24h sticky CLI session preserves local Claude CLI continuity only; server-side prompt-cache TTL remains short-lived.
@@ -107,7 +107,7 @@ Supported headers:
 
 | Header | Required? | Example | Meaning |
 | --- | --- | --- | --- |
-| `X-Claude-Proxy-Session-Key` | yes for header opt-in | `sevro:telegram:5216159759` | Caller-selected stable session key. |
+| `X-Claude-Proxy-Session-Key` | yes for header opt-in | `example:telegram:1234567890` | Caller-selected stable session key. |
 | `X-Claude-Proxy-Session-Mode` | optional | `sticky` | `sticky`, `pool`, or `stateless`. Defaults to `sticky` when key exists. |
 | `X-Claude-Proxy-Session-TTL-Seconds` | optional | `86400` | Requested idle TTL in seconds. Server clamps to configured min/max. |
 | `X-Claude-Proxy-Session-Reset` | optional | `1` | If truthy, evict existing sticky session before serving this request. |
@@ -121,7 +121,7 @@ Supported body extension:
   "messages": [{ "role": "user", "content": "Hello" }],
   "stream": true,
   "claude_proxy": {
-    "session_key": "sevro:telegram:5216159759",
+    "session_key": "example:telegram:1234567890",
     "session_mode": "sticky",
     "session_ttl_seconds": 86400,
     "session_reset": false,
@@ -433,8 +433,8 @@ Update docs:
 - `docs/openclaw-integration.md` — how OpenClaw can pass sticky headers or body fields, without hard-coding agents.
 - `README.md` or `PROTOCOL.md` — public API extension summary.
 - Infrastructure docs:
-  - `/Users/mehdichaouachi/.openclaw/workspace/memory/infra/claude-proxy.md`
-  - `/Users/mehdichaouachi/.openclaw/workspace/memory/infrastructure.md`
+  - `~/.openclaw/workspace/memory/infra/claude-proxy.md`
+  - `~/.openclaw/workspace/memory/infrastructure.md`
 
 ---
 
@@ -685,8 +685,8 @@ Responsibility:
 - `docs/openclaw-integration.md`
 - `PROTOCOL.md`
 - `README.md`
-- `/Users/mehdichaouachi/.openclaw/workspace/memory/infra/claude-proxy.md`
-- `/Users/mehdichaouachi/.openclaw/workspace/memory/infrastructure.md`
+- `~/.openclaw/workspace/memory/infra/claude-proxy.md`
+- `~/.openclaw/workspace/memory/infrastructure.md`
 
 ---
 
@@ -784,7 +784,7 @@ internalKey = sha256(JSON.stringify({
 2. Keep default disabled for public release if desired, or enabled only when explicitly requested by clients.
 3. Ship docs showing normal OpenAI clients are unaffected.
 4. Validate locally with unit tests and smoke tests.
-5. Enable on Mehdi's LaunchAgent with conservative defaults first:
+5. Enable on the LaunchAgent with conservative defaults first:
    - `CLAUDE_PROXY_STICKY_SESSIONS=1`
    - `CLAUDE_PROXY_STICKY_DEFAULT_TTL_SECONDS=3600`
    - `CLAUDE_PROXY_STICKY_MAX_TTL_SECONDS=86400`

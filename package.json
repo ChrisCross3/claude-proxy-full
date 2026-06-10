@@ -1,7 +1,7 @@
 {
-  "name": "openclaw-claude-proxy",
+  "name": "claude-proxy-full",
   "version": "1.0.8",
-  "description": "OpenClaw-oriented local Claude Code proxy with OpenAI-compatible chat, responses, streaming, tools, traces, and release-ready packaging.",
+  "description": "Local OpenAI-compatible Claude Code proxy backed by your Claude subscription — chat, responses, streaming, tools, traces, an isolated single-shot endpoint, and OpenRouter wire compatibility.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -39,16 +39,19 @@
     "openclaw",
     "claude-proxy"
   ],
-  "author": "mehdic",
+  "author": "ChrisCross3",
+  "contributors": [
+    "mehdic (upstream: openclaw-claude-proxy)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mehdic/openclaw-claude-proxy.git"
+    "url": "git+https://github.com/ChrisCross3/claude-proxy-full.git"
   },
   "bugs": {
-    "url": "https://github.com/mehdic/openclaw-claude-proxy/issues"
+    "url": "https://github.com/ChrisCross3/claude-proxy-full/issues"
   },
-  "homepage": "https://github.com/mehdic/openclaw-claude-proxy#readme",
+  "homepage": "https://github.com/ChrisCross3/claude-proxy-full#readme",
   "dependencies": {
     "express": "^4.21.2",
     "uuid": "^14.0.0"

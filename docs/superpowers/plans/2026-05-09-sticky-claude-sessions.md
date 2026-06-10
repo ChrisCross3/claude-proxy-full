@@ -76,10 +76,10 @@ The PRD defines the public API, safety constraints, observability, acceptance cr
 - `README.md`
   - Add concise feature summary and link to detailed docs.
 
-- `/Users/mehdichaouachi/.openclaw/workspace/memory/infra/claude-proxy.md`
+- `~/.openclaw/workspace/memory/infra/claude-proxy.md`
   - Add roadmap/reference entry for sticky session docs.
 
-- `/Users/mehdichaouachi/.openclaw/workspace/memory/infrastructure.md`
+- `~/.openclaw/workspace/memory/infrastructure.md`
   - Update Claude Proxy index line with sticky-session docs reference.
 
 ---
@@ -178,7 +178,7 @@ export interface ResponsesRequest {
 Run:
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 ```
 
@@ -187,7 +187,7 @@ Expected: TypeScript exits successfully.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/types/openai.ts
 git commit -m "feat: add Claude proxy session extension types"
 ```
@@ -344,7 +344,7 @@ test("invalid key with control character returns invalid_session_key", () => {
 Run:
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 ```
 
@@ -563,7 +563,7 @@ function error(status: number, code: string, message: string): SessionOptionsErr
 - [ ] **Step 2: Build**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 ```
 
@@ -572,7 +572,7 @@ Expected: PASS.
 - [ ] **Step 3: Run sticky option tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 node --test dist/__tests__/sticky-options.test.js
 ```
 
@@ -581,7 +581,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/server/sticky-options.ts src/__tests__/sticky-options.test.ts dist src/types/openai.ts
 git commit -m "feat: parse opt-in sticky session options"
 ```
@@ -649,7 +649,7 @@ Place them near `setSessionWarmHit` so reuse-related methods are grouped togethe
 - [ ] **Step 4: Build and run trace tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 node --test dist/__tests__/trace-store.test.js dist/__tests__/trace-sqlite.test.js dist/__tests__/trace-exporter.test.js
 ```
@@ -659,7 +659,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/trace/types.ts src/trace/builder.ts dist
 git commit -m "feat: trace sticky session metadata"
 ```
@@ -731,7 +731,7 @@ test("parseStickyTtlMs converts seconds to milliseconds", () => {
 - [ ] **Step 2: Build to verify missing module failure**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 ```
 
@@ -1034,7 +1034,7 @@ export function stickyPoolStats(): StickyPoolStats {
 - [ ] **Step 2: Build and run sticky pool tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 node --test dist/__tests__/sticky-session-pool.test.js
 ```
@@ -1044,7 +1044,7 @@ Expected: PASS.
 - [ ] **Step 3: Run existing session-pool tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 node --test dist/__tests__/session-pool.test.js
 ```
 
@@ -1053,7 +1053,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/subprocess/sticky-session-pool.ts src/__tests__/sticky-session-pool.test.ts dist
 git commit -m "feat: add sticky Claude session pool core"
 ```
@@ -1121,7 +1121,7 @@ Change signature to include:
 - [ ] **Step 5: Build to expose integration errors**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 ```
 
@@ -1312,7 +1312,7 @@ With:
 - [ ] **Step 8: Build and run route-adjacent tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 node --test dist/__tests__/responses-api.test.js dist/__tests__/bridge-streaming.test.js dist/__tests__/upstream-watchdog.test.js
 ```
@@ -1322,7 +1322,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/server/routes.ts src/subprocess/sticky-session-pool.ts dist
 git commit -m "feat: route stream-json requests through sticky sessions"
 ```
@@ -1392,7 +1392,7 @@ Add this block after existing pool metrics:
 - [ ] **Step 3: Build and run metrics smoke**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 node --test dist/__tests__/usage-reporting.test.js dist/__tests__/session-pool.test.js dist/__tests__/sticky-session-pool.test.js
 ```
@@ -1402,7 +1402,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/server/metrics.ts dist
 git commit -m "feat: expose sticky session metrics"
 ```
@@ -1443,7 +1443,7 @@ In both success and error response objects for `handleHealthDeep`, near `pool: p
 - [ ] **Step 4: Build and run health-adjacent tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 node --test dist/__tests__/runtime.test.js dist/__tests__/failure-simulation.test.js
 ```
@@ -1453,7 +1453,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/server/routes.ts dist
 git commit -m "feat: report sticky session health"
 ```
@@ -1494,7 +1494,7 @@ console.error(`[StreamJson] request start req_id=${requestId} trace_id=${tb.trac
 - [ ] **Step 3: Build and run full tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run build
 npm test
 ```
@@ -1504,7 +1504,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add src/server/routes.ts dist
 git commit -m "fix: keep stateless session mode out of worker pools"
 ```
@@ -1619,7 +1619,7 @@ Recommended key shape:
 Example:
 
 ```text
-X-Claude-Proxy-Session-Key: openclaw:sevro:telegram:5216159759
+X-Claude-Proxy-Session-Key: example:telegram:1234567890
 X-Claude-Proxy-Session-Mode: sticky
 X-Claude-Proxy-Session-TTL-Seconds: 86400
 ```
@@ -1630,7 +1630,7 @@ Use a conversation/chat/session component in the key so two conversations handle
 - [ ] **Step 5: Commit docs**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add PROTOCOL.md README.md docs/configuration.md docs/openclaw-integration.md
 git commit -m "docs: document sticky session extension"
 ```
@@ -1737,7 +1737,7 @@ Expected: sticky metrics are present and counters reflect smoke activity.
 - [ ] **Step 1: Clean build**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run clean
 npm run build
 ```
@@ -1747,7 +1747,7 @@ Expected: PASS.
 - [ ] **Step 2: Full unit tests**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm test
 ```
 
@@ -1756,7 +1756,7 @@ Expected: PASS.
 - [ ] **Step 3: Stream-json canary**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run canary:stream-json
 ```
 
@@ -1765,7 +1765,7 @@ Expected: PASS.
 - [ ] **Step 4: Quick soak**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run soak:quick
 ```
 
@@ -1774,7 +1774,7 @@ Expected: PASS.
 - [ ] **Step 5: SDK matrix**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run sdk:matrix
 ```
 
@@ -1783,7 +1783,7 @@ Expected: PASS or explicit dependency skips with `failed 0`.
 - [ ] **Step 6: Failure simulation**
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 npm run failure:sim
 ```
 
@@ -1804,7 +1804,7 @@ Expected: first turn `Sticky-Hit: 0`, second turn `Sticky-Hit: 1`, reset returns
 If validation results are recorded in docs:
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw/projects/claude-proxy
+cd ~/.openclaw/projects/claude-proxy
 git add docs README.md PROTOCOL.md
 git commit -m "docs: record sticky session validation"
 ```
@@ -1814,16 +1814,16 @@ git commit -m "docs: record sticky session validation"
 ### Task 15: Update infrastructure docs after implementation
 
 **Files:**
-- Modify: `/Users/mehdichaouachi/.openclaw/workspace/memory/infra/claude-proxy.md`
-- Modify: `/Users/mehdichaouachi/.openclaw/workspace/memory/infrastructure.md`
+- Modify: `~/.openclaw/workspace/memory/infra/claude-proxy.md`
+- Modify: `~/.openclaw/workspace/memory/infrastructure.md`
 
 - [ ] **Step 1: Update Claude Proxy infra doc**
 
 Add to the Source table:
 
 ```markdown
-| **Sticky sessions PRD** | `/Users/mehdichaouachi/.openclaw/projects/claude-proxy/docs/prd/sticky-sessions.md` |
-| **Sticky sessions implementation plan** | `/Users/mehdichaouachi/.openclaw/projects/claude-proxy/docs/superpowers/plans/2026-05-09-sticky-claude-sessions.md` |
+| **Sticky sessions PRD** | `~/.openclaw/projects/claude-proxy/docs/prd/sticky-sessions.md` |
+| **Sticky sessions implementation plan** | `~/.openclaw/projects/claude-proxy/docs/superpowers/plans/2026-05-09-sticky-claude-sessions.md` |
 ```
 
 Add a short section after the stream-json pool section:
@@ -1834,15 +1834,15 @@ Add a short section after the stream-json pool section:
 Sticky sessions are planned as a generic Claude Proxy protocol extension, not an OpenClaw-agent hard-code. Normal OpenAI-compatible requests continue using the existing default behavior. Callers that pass optional headers or the `claude_proxy` body extension can request `pool`, `sticky`, or `stateless` session behavior.
 
 Primary design docs:
-- PRD: `/Users/mehdichaouachi/.openclaw/projects/claude-proxy/docs/prd/sticky-sessions.md`
-- Implementation plan: `/Users/mehdichaouachi/.openclaw/projects/claude-proxy/docs/superpowers/plans/2026-05-09-sticky-claude-sessions.md`
+- PRD: `~/.openclaw/projects/claude-proxy/docs/prd/sticky-sessions.md`
+- Implementation plan: `~/.openclaw/projects/claude-proxy/docs/superpowers/plans/2026-05-09-sticky-claude-sessions.md`
 
 Important caveat: a 24h sticky TTL preserves local Claude CLI process continuity, not Anthropic server-side prompt cache for 24h.
 ```
 
 - [ ] **Step 2: Update infrastructure index line**
 
-In `/Users/mehdichaouachi/.openclaw/workspace/memory/infrastructure.md`, update the Claude Proxy bullet to mention:
+In `~/.openclaw/workspace/memory/infrastructure.md`, update the Claude Proxy bullet to mention:
 
 ```markdown
 planned opt-in generic sticky Claude CLI sessions, documented in the repo PRD and implementation plan
@@ -1853,7 +1853,7 @@ planned opt-in generic sticky Claude CLI sessions, documented in the repo PRD an
 The infrastructure docs live in the OpenClaw workspace memory repo, not necessarily the Claude Proxy repo. If that workspace is git-backed, commit separately:
 
 ```bash
-cd /Users/mehdichaouachi/.openclaw
+cd ~/.openclaw
 git status --short
 git add workspace/memory/infra/claude-proxy.md workspace/memory/infrastructure.md
 git commit -m "docs: reference Claude Proxy sticky session plan"
