@@ -472,9 +472,22 @@ export function resolveCwd(options: { cwd?: string; isolateCwd?: boolean }): str
 
 /**
  * Resolve the environment block for a spawned subprocess. When injectOAuthEnv
- * is set, the Anthropic OAuth access token is read from
- * ~/.claude/.credentials.json and exposed as ANTHROPIC_API_KEY. Required when
- * spawning with --bare, because --bare disables CLI OAuth/keychain reads.
+ * is set, the Anthropic OAuth token (from ~/.claude/.credentials.json or, when
+ * that file does not exist, CLAUDE_CODE_OAUTH_TOKEN) is exposed as
+ * ANTHROPIC_AUTH_TOKEN. Required when spawning with --bare, because --bare
+ * disables CLI OAuth/keychain reads.
+ *
+ * Why ANTHROPIC_AUTH_TOKEN and not ANTHROPIC_API_KEY: the two travel in
+ * different headers. ANTHROPIC_API_KEY is sent as `x-api-key`, which only
+ * accepts `sk-ant-api…` keys; what we hold is an OAuth token (`sk-ant-oat…`),
+ * and CLI 2.1.220 rejects it there with "Invalid API key". ANTHROPIC_AUTH_TOKEN
+ * is sent as `Authorization: Bearer`, which is the form an OAuth token takes.
+ * Measured on a live tenant 2026-07-26: `--bare` + ANTHROPIC_API_KEY fails,
+ * `--bare` + ANTHROPIC_AUTH_TOKEN answers normally. Older CLI versions did
+ * accept the OAuth token via x-api-key, which is why this used to work.
+ *
+ * ANTHROPIC_API_KEY is cleared on this path so an inherited stray key cannot
+ * take precedence over the token we just resolved.
  *
  * Shared between manager.ts and stream-json-manager.ts.
  */
@@ -484,7 +497,8 @@ export async function resolveEnv(
   const base: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_PROXY: "1" };
   if (options.injectOAuthEnv) {
     const token = await resolveAnthropicApiKey();
-    base.ANTHROPIC_API_KEY = token;
+    base.ANTHROPIC_AUTH_TOKEN = token;
+    delete base.ANTHROPIC_API_KEY;
   }
   return base;
 }

@@ -17,11 +17,18 @@ function makeFs(initial: Record<string, { content: string; mtimeMs: number }> = 
   };
 }
 
-function stubResolver(fs: FakeFs, opts: { now?: () => number; path?: string } = {}) {
+function stubResolver(
+  fs: FakeFs,
+  opts: { now?: () => number; path?: string; envToken?: string } = {},
+) {
   const path = opts.path ?? "/fake/.claude/.credentials.json";
   return createCredentialsResolver({
     credentialsPath: path,
     now: opts.now,
+    // Immer explizit: ohne das wuerde ein auf der Testmaschine gesetztes
+    // CLAUDE_CODE_OAUTH_TOKEN in die Not-Found-Faelle durchschlagen und sie
+    // gruen faerben.
+    envToken: () => opts.envToken,
     readFile: async (p) => {
       const entry = fs.files.get(p);
       if (!entry) throw new Error(`ENOENT: ${p}`);
@@ -262,4 +269,58 @@ test("credentials-resolver: getCachedExpiresAtMs returns null for legacy-format 
   const resolver = stubResolver(fs);
   await resolver.resolve();
   assert.equal(resolver.getCachedExpiresAtMs(), null);
+});
+
+// --- Zweite Token-Quelle: CLAUDE_CODE_OAUTH_TOKEN ---------------------------
+// Hintergrund: wird ein Host headless per `claude setup-token` aufgesetzt,
+// entsteht nie eine ~/.claude/.credentials.json. Ohne diese Quelle lief der
+// isolated-Mode dort in credentials_not_found und jede Hintergrund-Pipeline
+// stand still (belegt am laufenden Tenant, 2026-07-26).
+
+test("credentials-resolver: falls back to CLAUDE_CODE_OAUTH_TOKEN when file is absent", async () => {
+  const resolver = stubResolver(makeFs(), { envToken: "sk-ant-oat01-FROM-ENV" });
+  assert.equal(await resolver.resolve(), "sk-ant-oat01-FROM-ENV");
+});
+
+test("credentials-resolver: file wins over env token (only the file rotates)", async () => {
+  const path = "/fake/.claude/.credentials.json";
+  const fs = makeFs({
+    [path]: {
+      content: JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-FROM-FILE" } }),
+      mtimeMs: 1000,
+    },
+  });
+  const resolver = stubResolver(fs, { envToken: "sk-ant-oat01-FROM-ENV" });
+  assert.equal(await resolver.resolve(), "sk-ant-oat01-FROM-FILE");
+});
+
+test("credentials-resolver: blank env token counts as unset", async () => {
+  const resolver = stubResolver(makeFs(), { envToken: "   " });
+  await assert.rejects(() => resolver.resolve(), CredentialsNotFoundError);
+});
+
+test("credentials-resolver: no file and no env token still throws NotFound", async () => {
+  const resolver = stubResolver(makeFs());
+  await assert.rejects(() => resolver.resolve(), CredentialsNotFoundError);
+});
+
+test("credentials-resolver: NotFound message names both ways to fix it", async () => {
+  const resolver = stubResolver(makeFs());
+  await assert.rejects(
+    () => resolver.resolve(),
+    (err: Error) =>
+      /claude \/login/.test(err.message) && /CLAUDE_CODE_OAUTH_TOKEN/.test(err.message),
+  );
+});
+
+test("credentials-resolver: hasChangedSince is false with env token and no file", async () => {
+  // Sonst verwirft der Init-Pool bei jeder Abfrage seine warmen Slots: ohne
+  // Datei gibt es nichts, was rotieren koennte.
+  const resolver = stubResolver(makeFs(), { envToken: "sk-ant-oat01-FROM-ENV" });
+  assert.equal(await resolver.hasChangedSince(0), false);
+});
+
+test("credentials-resolver: hasChangedSince stays true without any source", async () => {
+  const resolver = stubResolver(makeFs());
+  assert.equal(await resolver.hasChangedSince(0), true);
 });

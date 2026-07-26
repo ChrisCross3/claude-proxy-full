@@ -22,6 +22,9 @@ export interface CredentialsResolverDeps {
   stat?: (path: string) => Promise<{ mtimeMs: number }>;
   // Jetzt-Zeit für Tests (Token-Expiry-Check).
   now?: () => number;
+  // Zweite Token-Quelle: CLAUDE_CODE_OAUTH_TOKEN aus der Umgebung
+  // (überschreibbar für Tests). Siehe readEnvToken() unten.
+  envToken?: () => string | undefined;
 }
 
 interface CachedToken {
@@ -70,9 +73,25 @@ export function createCredentialsResolver(deps: CredentialsResolverDeps = {}) {
   const fsRead = deps.readFile ?? readFile;
   const fsStat = deps.stat ?? (async (p: string) => stat(p));
   const now = deps.now ?? Date.now;
+  const envToken = deps.envToken ?? (() => process.env.CLAUDE_CODE_OAUTH_TOKEN);
 
   let cache: CachedToken | null = null;
   let lastResolvedAtMs = 0;
+
+  // Zweite Token-Quelle für Deployments ohne interaktives `claude /login`.
+  //
+  // Das Modul entstand, als der Token ausschliesslich aus einem Browser-Login
+  // stammte und deshalb als Datei vorlag. Wird der Host stattdessen per
+  // `claude setup-token` aufgesetzt (headless, kein Browser pro Maschine),
+  // existiert diese Datei nie -- der isolated-Mode lief dann in ein
+  // credentials_not_found und jede Hintergrund-Pipeline stand still, ohne dass
+  // dem Aufrufer klar war warum. Die Umgebungsvariable ist in dem Fall die
+  // einzige Quelle. Datei hat weiter Vorrang: nur sie kennt expiresAt und
+  // rotiert von selbst.
+  function readEnvToken(): string | undefined {
+    const t = envToken()?.trim();
+    return t ? t : undefined;
+  }
 
   async function resolve(): Promise<string> {
     // Schritt 1: mtime prüfen (Token-Rotation-Detection).
@@ -81,9 +100,12 @@ export function createCredentialsResolver(deps: CredentialsResolverDeps = {}) {
       const s = await fsStat(path);
       mtimeMs = s.mtimeMs;
     } catch (err) {
+      const fromEnv = readEnvToken();
+      if (fromEnv) return fromEnv;
       throw new CredentialsNotFoundError(
         `Cannot stat credentials file ${path}: ${(err as Error).message}. ` +
-          `Run \`claude /login\` on the host to create it.`,
+          `Run \`claude /login\` on the host to create it, ` +
+          `or set CLAUDE_CODE_OAUTH_TOKEN (\`claude setup-token\`).`,
       );
     }
 
@@ -154,6 +176,10 @@ export function createCredentialsResolver(deps: CredentialsResolverDeps = {}) {
         const s = await fsStat(path);
         return s.mtimeMs > timestampMs;
       } catch {
+        // Kein File, aber ein Token in der Umgebung: dann gibt es nichts, was
+        // rotieren koennte -- "unveraendert" melden, sonst verwirft der Pool
+        // bei jeder Abfrage seine warmen Slots.
+        if (readEnvToken()) return false;
         // File weg → "hat sich geändert" (zwingt re-resolve, wird dann mit
         // CredentialsNotFoundError korrekt fehlschlagen).
         return true;
