@@ -79,15 +79,31 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-/** 5 minutes by default — silence threshold before upstream is declared soft-dead. */
-export const UPSTREAM_SOFT_DEAD_MS = parsePositiveIntEnv("CLAUDE_PROXY_UPSTREAM_SOFT_DEAD_MS", 300_000);
+/**
+ * Silence threshold before upstream is declared soft-dead. 15 minutes.
+ *
+ * Raised from 5 minutes (2026-07-26). The three liveness signals this file
+ * checks — parsed stream events, raw stdout/stderr bytes, CPU-burning
+ * descendants — all miss the same case: the CLI process itself thinking hard
+ * and emitting nothing. Its own CPU time is not a signal here, and with
+ * `display: omitted` (the default on current models) a long reasoning stretch
+ * produces no readable output either. On the newest models a single request on
+ * a hard task can legitimately run well past ten minutes at high effort, so a
+ * 5-minute ceiling turns "thinking" into "killed" — and the caller sees a
+ * killed subprocess, not a timeout, which is a much harder thing to diagnose.
+ *
+ * The cost of the higher default is that a genuinely wedged CLI is detected
+ * later. That is the cheaper mistake: a false kill destroys work in progress,
+ * whereas late detection only delays a retry the callers already handle.
+ */
+export const UPSTREAM_SOFT_DEAD_MS = parsePositiveIntEnv("CLAUDE_PROXY_UPSTREAM_SOFT_DEAD_MS", 900_000);
 
 /**
  * Maximum silence before soft-dead fires even with active descendants.
- * Default 10 minutes (2× soft-dead threshold). Prevents zombie/idle
+ * Default 30 minutes (2× soft-dead threshold). Prevents zombie/idle
  * descendants from masking a dead Claude forever.
  */
-export const DESCENDANT_GRACE_CAP_MS = parsePositiveIntEnv("CLAUDE_PROXY_DESCENDANT_GRACE_MS", 600_000);
+export const DESCENDANT_GRACE_CAP_MS = parsePositiveIntEnv("CLAUDE_PROXY_DESCENDANT_GRACE_MS", 1_800_000);
 
 /** Minimum aggregate %CPU across descendants to count as "meaningful activity". */
 export const DESCENDANT_CPU_FLOOR = 0.5;

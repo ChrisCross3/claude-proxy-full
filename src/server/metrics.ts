@@ -21,6 +21,7 @@ import { fallbackCounters } from "./routes.js";
 import { defaultRuntime } from "../subprocess/runtime.js";
 import type { ClaudeTokenUsageBreakdown, UsageCostEstimate } from "./pricing.js";
 import { traceStore } from "../trace/store.js";
+import { resolveModel } from "../models/registry.js";
 import type { ProtocolErrorClass } from "../errors.js";
 
 // Per-request counters maintained inline by the chat-completion handlers.
@@ -101,11 +102,25 @@ function escapeLabel(v: string): string {
   return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
 }
 
-function canonicalizeMetricModel(model: string): string {
+/**
+ * Map any accepted model identifier to a bounded metric label.
+ *
+ * The registry is asked first, so short aliases resolve to whatever they
+ * actually point at. This used to be a hand-maintained copy of the alias table
+ * and had drifted: it reported `opus` as `claude-opus-4-6` while the registry
+ * resolved `opus` to 4-7 — the metric named a model the request never used,
+ * which is worse than no metric at all, and no test caught it because both
+ * lists were self-consistent. It also silently missed every model added after
+ * it was written.
+ *
+ * The literal list below is now only the tail: models the registry does not
+ * carry (retired or never-registered IDs) whose existing time series should
+ * not break. New models need no entry here.
+ */
+export function canonicalizeMetricModel(model: string): string {
   const stripped = String(model || "").replace(/^(anthropic|claude-proxy|claude-code-cli|openrouter\/anthropic)\//, "");
-  if (stripped === "opus") return "claude-opus-4-6";
-  if (stripped === "sonnet") return "claude-sonnet-4-6";
-  if (stripped === "haiku") return "claude-haiku-4-5";
+  const resolved = resolveModel(stripped);
+  if (resolved) return resolved.id;
   if (stripped.startsWith("claude-opus-4-8")) return "claude-opus-4-8";
   if (stripped.startsWith("claude-opus-4-7")) return "claude-opus-4-7";
   if (stripped.startsWith("claude-opus-4-6")) return "claude-opus-4-6";

@@ -11,6 +11,14 @@ import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { resolveAnthropicApiKey } from "../auth/credentials-resolver.js";
 import { EventEmitter } from "events";
+import {
+  createChunkDecoder,
+  killProcessTree,
+  safeEnd,
+  safeWrite,
+  stdoutCapBytes,
+  type ChunkDecoder,
+} from "./hardening.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -92,6 +100,10 @@ const DEFAULT_TIMEOUT = 900000; // 15 minutes (agentic tasks can be long)
 export class ClaudeSubprocess extends EventEmitter {
   private process: ChildProcess | null = null;
   private buffer: string = "";
+  /** Bytes dropped because the buffer hit its ceiling; 0 in the normal case. */
+  private bufferDropped: number = 0;
+  private readonly stdoutDecoder: ChunkDecoder = createChunkDecoder();
+  private readonly stderrDecoder: ChunkDecoder = createChunkDecoder();
   private timeoutId: NodeJS.Timeout | null = null;
   private isKilled: boolean = false;
 
@@ -134,13 +146,16 @@ export class ClaudeSubprocess extends EventEmitter {
         // Set up output listeners eagerly so a warm process pre-buffers
         // startup-banner output rather than blocking on the pipe.
         this.process.stdout?.on("data", (chunk: Buffer) => {
-          const data = chunk.toString();
-          this.buffer += data;
+          // Decoded through a StringDecoder: a multi-byte character split
+          // across two chunks would otherwise become U+FFFD and surface later
+          // as an unexplained JSON parse error.
+          const data = this.stdoutDecoder.write(chunk);
+          this.appendToBuffer(data);
           this.processBuffer();
         });
 
         this.process.stderr?.on("data", (chunk: Buffer) => {
-          const errorText = chunk.toString().trim();
+          const errorText = this.stderrDecoder.write(chunk).trim();
           if (errorText) {
             console.error("[Subprocess stderr]:", errorText.slice(0, 200));
           }
@@ -174,13 +189,19 @@ export class ClaudeSubprocess extends EventEmitter {
     this.timeoutId = setTimeout(() => {
       if (!this.isKilled) {
         this.isKilled = true;
-        this.process?.kill("SIGTERM");
+        // Escalating kill: a CLI wedged past its timeout is exactly the case
+        // where a bare SIGTERM is ignored, and its spawned tools were never
+        // signalled at all.
+        if (this.process) killProcessTree(this.process);
         this.emit("error", new Error(`Request timed out after ${timeoutMs}ms`));
       }
     }, timeoutMs);
 
-    this.process.stdin?.write(prompt);
-    this.process.stdin?.end();
+    // EPIPE-safe: if the CLI died between prepare and submit, write() raises
+    // an async 'error' event that would otherwise be unhandled and take the
+    // whole proxy down.
+    safeWrite(this.process.stdin, prompt);
+    safeEnd(this.process.stdin);
   }
 
   /**
@@ -363,6 +384,41 @@ export class ClaudeSubprocess extends EventEmitter {
   }
 
   /**
+   * Append decoded stdout to the line buffer, bounded.
+   *
+   * The buffer only holds the tail after the last newline in the normal case,
+   * so it stays small — but a CLI that streams megabytes without a newline
+   * (or a runaway loop) would otherwise grow it until the process dies of
+   * memory exhaustion, taking every other in-flight request down with it.
+   * Past the ceiling we drop and count rather than grow; the drop is logged
+   * once so a truncated turn is explainable instead of merely short.
+   */
+  private appendToBuffer(data: string): void {
+    if (!data) return;
+    const cap = stdoutCapBytes();
+    const room = cap - Buffer.byteLength(this.buffer, "utf8");
+    if (room <= 0) {
+      this.bufferDropped += Buffer.byteLength(data, "utf8");
+      return;
+    }
+    const incoming = Buffer.byteLength(data, "utf8");
+    if (incoming <= room) {
+      this.buffer += data;
+      return;
+    }
+    let cut = data;
+    while (Buffer.byteLength(cut, "utf8") > room) cut = cut.slice(0, -1);
+    this.buffer += cut;
+    const dropped = incoming - Buffer.byteLength(cut, "utf8");
+    if (this.bufferDropped === 0) {
+      console.error(
+        `[Subprocess] stdout buffer hit cap ${cap} bytes for PID ${this.process?.pid}; dropping further output`,
+      );
+    }
+    this.bufferDropped += dropped;
+  }
+
+  /**
    * Process the buffer and emit parsed messages
    */
   private processBuffer(): void {
@@ -409,7 +465,10 @@ export class ClaudeSubprocess extends EventEmitter {
     if (!this.isKilled && this.process) {
       this.isKilled = true;
       this.clearTimeout();
-      this.process.kill(signal);
+      // Escalates to SIGKILL and takes descendants with it if the process does
+      // not exit within the grace window. A slot whose process survived its
+      // own kill is worse than a dead one: the pool hands it out again.
+      killProcessTree(this.process, { initialSignal: signal });
     }
   }
 

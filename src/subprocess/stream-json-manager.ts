@@ -36,6 +36,7 @@ import { getSecretResolutionDecisions, loadOpenclawMcpServers, type ResolvedMcpS
 import { applyMcpPolicy, secretDecisionsToTrace } from "../mcp/governance.js";
 import type { TraceMcpDecision } from "../trace/types.js";
 import { parseStreamJsonLine } from "./stream-json-parser.js";
+import { createChunkDecoder, killProcessTree, type ChunkDecoder } from "./hardening.js";
 import { pushClaudeFlagIfSupported } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
@@ -155,6 +156,8 @@ export interface StreamJsonOptions {
 export class StreamJsonSubprocess extends EventEmitter {
   private process: ChildProcess | null = null;
   private buffer: string = "";
+  private readonly stdoutDecoder: ChunkDecoder = createChunkDecoder();
+  private readonly stderrDecoder: ChunkDecoder = createChunkDecoder();
   private isKilled: boolean = false;
   private initialized: boolean = false;
   private pendingControl: Map<string, (response: unknown) => void> = new Map();
@@ -340,7 +343,11 @@ export class StreamJsonSubprocess extends EventEmitter {
 
       this.process.stdout?.on("data", (chunk: Buffer) => {
         this.markProcessActivity();
-        this.buffer += chunk.toString();
+        // StringDecoder, not chunk.toString(): NDJSON frames routinely straddle
+        // chunk boundaries, and a multi-byte character split across two chunks
+        // would decode to U+FFFD on both sides — corrupting a frame that then
+        // fails to parse for reasons invisible at the failure site.
+        this.buffer += this.stdoutDecoder.write(chunk);
         if (exceedsStdoutCap(this.buffer.length)) {
           console.error(
             `[StreamJson] stdout buffer exceeded hard cap ` +
@@ -359,7 +366,7 @@ export class StreamJsonSubprocess extends EventEmitter {
 
       this.process.stderr?.on("data", (chunk: Buffer) => {
         this.markProcessActivity();
-        const text = chunk.toString().trim();
+        const text = this.stderrDecoder.write(chunk).trim();
         if (text) console.error("[StreamJson stderr]:", text.slice(0, 200));
       });
 
@@ -491,6 +498,17 @@ export class StreamJsonSubprocess extends EventEmitter {
     if (!this.process?.stdin || this.process.stdin.destroyed || this.process.stdin.writableEnded) {
       throw new Error("stdin not writable");
     }
+    // The guard above closes the window we can see; it cannot close the race
+    // where the CLI dies between the check and the write. That EPIPE arrives
+    // as an async 'error' event on the stream — unhandled, it terminates the
+    // whole proxy over one dead subprocess. Callers still get the throw above
+    // for the synchronous case; this only keeps the async one survivable.
+    // Optional call: the handle is a full Writable in production, but not every
+    // caller (or test double) supplies one, and a missing `.on` must not turn a
+    // guard against crashes into the crash itself.
+    this.process.stdin.on?.("error", () => {
+      /* EPIPE / ECONNRESET: reader is gone. The turn fails via close/timeout. */
+    });
     this.process.stdin.write(JSON.stringify(obj) + "\n");
     this.markProcessActivity();
   }
@@ -544,7 +562,10 @@ export class StreamJsonSubprocess extends EventEmitter {
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
     if (this.process && !this.isKilled) {
       this.isKilled = true;
-      this.process.kill(signal);
+      // Escalates to SIGKILL and reaps descendants if the CLI ignores the
+      // polite signal. A pool slot whose process outlived its kill gets handed
+      // out again and fails the next request for reasons that look unrelated.
+      killProcessTree(this.process, { initialSignal: signal });
     }
   }
 

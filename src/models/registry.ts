@@ -34,6 +34,64 @@ export interface ClaudeModelDefinition {
 
 export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
   {
+    // Fable 5 — Anthropics faehigstes breit verfuegbares Modell, oberhalb der
+    // Opus-Preisklasse ($10 in / $50 out pro Mtok). Besonderheit gegenueber der
+    // Opus-Linie: Thinking ist IMMER an und laesst sich nicht abschalten — ein
+    // explizites `thinking: disabled` quittiert die API mit 400. Effort deckt
+    // die volle Leiter ab und ist hier der einzige Tiefen-Regler.
+    id: 'claude-fable-5',
+    name: 'Claude Fable 5',
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinkingSupported: true,
+    oneMillionContextVariant: false,
+    aliases: [
+      'fable-5',
+      'claude-proxy/claude-fable-5',
+      'claude-code-cli/claude-fable-5',
+    ],
+  },
+  {
+    // Opus 5 — Nachfolger von Opus 4.8 in der Opus-Linie, zum selben Preis
+    // ($5 / $25). Zwei Verhaltensaenderungen, die hier nur dokumentiert und
+    // nicht erzwungen werden koennen, weil der Proxy den thinking-Zustand nicht
+    // setzt: Thinking ist per Default an (Opus 4.8 war ohne), und Abschalten
+    // ist nur bis Effort `high` erlaubt — mit `xhigh`/`max` antwortet die API
+    // mit 400. Wer hier spaeter ein thinking-Flag ergaenzt, muss das pruefen.
+    id: 'claude-opus-5',
+    name: 'Claude Opus 5',
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinkingSupported: true,
+    oneMillionContextVariant: false,
+    aliases: [
+      'opus-5',
+      'claude-proxy/claude-opus-5',
+      'claude-code-cli/claude-opus-5',
+    ],
+  },
+  {
+    // Sonnet 5 — Sonnet-Klasse auf nahezu Opus-Niveau bei Coding/Agentic,
+    // $3 / $15 (Intro $2 / $10 bis 2026-08-31). Erster Sonnet mit `xhigh`.
+    // Achtung beim Tokenzaehlen: neuer Tokenizer, rund 30 % mehr Tokens fuer
+    // denselben Text als Sonnet 4.6 — Kostenvergleiche gegen 4.6 sind ohne
+    // Neumessung wertlos.
+    id: 'claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinkingSupported: true,
+    oneMillionContextVariant: false,
+    aliases: [
+      'sonnet-5',
+      'claude-proxy/claude-sonnet-5',
+      'claude-code-cli/claude-sonnet-5',
+    ],
+  },
+  {
     // Opus 4.8 — flagship Opus, gleicher 1M-Context + Opus-4.8-Pricing wie 4.7
     // (input $5 / output $25 / cache-write $6.25 / cache-read $0.5 pro Mtok).
     // Hinzugefuegt Welle 6 (v0.19-Migration) aus mehdic-Base-Commit 9721fb5,

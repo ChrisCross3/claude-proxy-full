@@ -33,6 +33,7 @@ import {
   resultUsageToOpenAI,
 } from "../adapter/cli-to-openai.js";
 import { parseToolCalls, shouldBridgeExternalTools, type ToolCallParseResult } from "../adapter/tools.js";
+import { classifyCliResultError, toOpenAiErrorBody } from "../adapter/cli-result-error.js";
 import type { OpenAIChatRequest, OpenAIChatChunk, ResponsesRequest } from "../types/openai.js";
 import type { ClaudeCliAssistant, ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
 import { attachN8nDetector } from "../n8n/detector.js";
@@ -59,7 +60,7 @@ import { createTraceBuilder, type TraceBuilder } from "../trace/builder.js";
 import { traceStore } from "../trace/store.js";
 import { detectOverlappingTools, isMcpInjectionEnabled, mcpGovernanceSummary } from "../mcp/governance.js";
 import { getClaudeCliCapabilities } from "../subprocess/claude-flags.js";
-import { attachPhaseTracker } from "./phase-tracker.js";
+import { attachPhaseTracker, phaseProgressEnabled } from "./phase-tracker.js";
 
 const FALLBACK_ENABLED = process.env.CLAUDE_PROXY_FALLBACK_ON_STREAM_FAILURE === "1";
 
@@ -211,7 +212,15 @@ const KNOWN_MODEL_LABELS = new Set<string>([
     m.aliases.filter((a) => /^claude-[a-z]+-\d/.test(a) && !a.includes("/")),
   ),
 ]);
-function canonicalizeModelLabel(model: string | undefined): string {
+/**
+ * Reduce an arbitrary client-supplied model string to a bounded metric label.
+ *
+ * Exported so its own test can exercise *this* function. The test used to keep
+ * a hand-copied replica of the logic and assert against that — which passes
+ * regardless of what production does, and silently stopped covering the label
+ * set the moment the two diverged.
+ */
+export function canonicalizeModelLabel(model: string | undefined): string {
   if (!model) return "unknown";
   // Strip provider prefix (claude-proxy/ or claude-code-cli/).
   const stripped = model.replace(/^(claude-proxy|claude-code-cli)\//, "");
@@ -616,6 +625,27 @@ async function handleStreamingResponse(
       isComplete = true;
       if (!res.writableEnded) {
         annotateAndRecordUsage(result, cliInput.model);
+
+        // Same rule as the non-streaming path: a failed turn is an error, not
+        // an answer. If nothing has been written yet the status line is still
+        // ours; once the SSE stream is open the status is spent, so the error
+        // goes out as an error object in the stream rather than being dressed
+        // up as a completed message.
+        const cliError = classifyCliResultError(result);
+        if (cliError) {
+          tb.setError(cliError.traceClass, cliError.message);
+          recordUsageOnTrace(tb, result);
+          tb.commit();
+          if (!res.headersSent) {
+            res.status(cliError.status).json(toOpenAiErrorBody(cliError));
+          } else {
+            res.write(`data: ${JSON.stringify(toOpenAiErrorBody(cliError))}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+          return;
+        }
+
         const rawText = result.result || bufferedText;
         const parsed = parseToolCalls(rawText, body);
         recordToolCallParseOutcome(parsed, bridgeTools);
@@ -727,6 +757,23 @@ async function handleNonStreamingResponse(
       if (finalResult) {
         annotateAndRecordUsage(finalResult, cliInput.model);
         setUsageHeaders(res, finalResult);
+
+        // A failed turn must not leave here as a 200. The CLI reports failure
+        // inside a result envelope, so without this check "Not logged in"
+        // arrives as the assistant's answer with finish_reason "stop" and no
+        // caller can tell it from a real reply.
+        const cliError = classifyCliResultError(finalResult);
+        if (cliError) {
+          tb.setError(cliError.traceClass, cliError.message);
+          recordUsageOnTrace(tb, finalResult);
+          tb.commit();
+          if (!res.headersSent) {
+            res.status(cliError.status).json(toOpenAiErrorBody(cliError));
+          }
+          resolve();
+          return;
+        }
+
         const response = cliResultToOpenai(finalResult, requestId, body, cliInput.model);
         const finishReason = response.choices[0]?.finish_reason || "stop";
         tb.setFinishReason(finishReason as "stop" | "tool_calls");
@@ -902,7 +949,16 @@ async function handleStreamJsonRequest(
     }
 
     // Priority 2: Claude runtime phase (tool_use start, tool wait).
-    if (!hasRenderableAssistantContent(content)) {
+    //
+    // Off by default. These lines are transport-level progress, but they ship
+    // as ordinary assistant deltas, so any client that renders deltas as they
+    // arrive shows them as part of the answer and then has them overwritten by
+    // the real text — visible flicker in chat surfaces (reported from a
+    // Telegram front-end). The alternative below costs nothing and lies to
+    // nobody: an SSE comment keeps the connection open without pretending to
+    // be content. Opt in with CLAUDE_PROXY_PHASE_PROGRESS=1 when the consumer
+    // is known to render progress separately.
+    if (phaseProgressEnabled() && !hasRenderableAssistantContent(content)) {
       const phase = phaseTracker.poll();
       if (phase) {
         content = "\n" + phase.text + "\n";
@@ -1572,6 +1628,20 @@ async function handleResponsesNonStreaming(
     subprocess.on("close", (code: number | null) => {
       if (finalResult) {
         annotateAndRecordUsage(finalResult, cliInput.model);
+
+        // Same failed-turn rule as the chat-completions path.
+        const cliError = classifyCliResultError(finalResult);
+        if (cliError) {
+          tb.setError(cliError.traceClass, cliError.message);
+          recordUsageOnTrace(tb, finalResult);
+          tb.commit();
+          if (!res.headersSent) {
+            res.status(cliError.status).json(toOpenAiErrorBody(cliError));
+          }
+          resolve();
+          return;
+        }
+
         const chatResponse = cliResultToOpenai(finalResult, requestId, chatReq, cliInput.model);
         const responsesResponse = chatResponseToResponses(chatResponse, requestId);
         const hasToolCalls = chatResponse.choices[0]?.message?.tool_calls && chatResponse.choices[0].message.tool_calls.length > 0;
@@ -1671,6 +1741,23 @@ async function handleResponsesStreaming(
       isComplete = true;
       if (!res.writableEnded) {
         annotateAndRecordUsage(result, cliInput.model);
+
+        // Same failed-turn rule; on the Responses stream the error goes out as
+        // an `error` event rather than a completed response.
+        const cliError = classifyCliResultError(result);
+        if (cliError) {
+          tb.setError(cliError.traceClass, cliError.message);
+          recordUsageOnTrace(tb, result);
+          tb.commit();
+          if (!res.headersSent) {
+            res.status(cliError.status).json(toOpenAiErrorBody(cliError));
+          } else {
+            res.write(`event: error\ndata: ${JSON.stringify(toOpenAiErrorBody(cliError))}\n\n`);
+            res.end();
+          }
+          return;
+        }
+
         const rawText = result.result || fullText;
         const parsed = parseToolCalls(rawText, chatReq);
         fullText = parsed.textContent || "";

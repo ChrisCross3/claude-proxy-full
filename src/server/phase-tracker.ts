@@ -19,6 +19,22 @@
 
 import type { EventEmitter } from "events";
 
+/**
+ * Whether phase lines may be emitted as assistant deltas on the SSE stream.
+ *
+ * Default off. The lines are truthful, but they travel as ordinary content
+ * deltas, so a client that renders deltas live shows them inside the answer
+ * and then replaces them when the real text arrives — flicker. Consumers that
+ * render progress out-of-band can opt in with CLAUDE_PROXY_PHASE_PROGRESS=1.
+ *
+ * Read per call rather than captured at import time so tests (and an operator
+ * flipping the variable) do not need a process restart to take effect.
+ */
+export function phaseProgressEnabled(): boolean {
+  const raw = (process.env.CLAUDE_PROXY_PHASE_PROGRESS || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 /** Minimum silence (ms) before we report "waiting for tool result". */
 const TOOL_WAIT_THRESHOLD_MS = 8_000;
 

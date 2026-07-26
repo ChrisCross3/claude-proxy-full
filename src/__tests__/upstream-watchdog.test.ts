@@ -60,8 +60,12 @@ function deadSnapshot(overrides: Partial<SubprocessSnapshot> = {}): SubprocessSn
 // Threshold constant
 // ---------------------------------------------------------------------------
 
-test("UPSTREAM_SOFT_DEAD_MS is exactly 5 minutes", () => {
-  assert.strictEqual(UPSTREAM_SOFT_DEAD_MS, 5 * 60 * 1000);
+test("UPSTREAM_SOFT_DEAD_MS is 15 minutes", () => {
+  // Raised from 5 minutes on 2026-07-26: none of the watchdog's liveness
+  // signals see a CLI that is thinking hard and emitting nothing, and on
+  // current models a single hard request can legitimately run past ten
+  // minutes. A tighter ceiling kills work in progress.
+  assert.strictEqual(UPSTREAM_SOFT_DEAD_MS, 15 * 60 * 1000);
 });
 
 // ---------------------------------------------------------------------------
@@ -98,13 +102,16 @@ test("triggers at exactly 5 minutes", () => {
   );
 });
 
-test("triggers when Claude has been silent for 10 minutes", () => {
+test("triggers well past the silence threshold", () => {
+  // Expressed relative to the threshold on purpose: an absolute duration here
+  // silently stops testing "past the threshold" the moment the default moves,
+  // which is exactly what happened when it was written as 10 minutes.
   const now = Date.now();
-  const lastClaudeActivityAt = now - 10 * 60 * 1000;
+  const lastClaudeActivityAt = now - UPSTREAM_SOFT_DEAD_MS * 2;
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, aliveSnapshot(), now),
     true,
-    "10 minutes silence should trigger",
+    "double the threshold should trigger",
   );
 });
 
@@ -116,7 +123,7 @@ test("client heartbeat activity does NOT reset upstream liveness", () => {
   // Simulate: Claude silent for 6 minutes, but client heartbeats kept firing.
   // The watchdog only looks at lastClaudeActivityAt, not client activity.
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000; // 6 min ago
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000); // just past the threshold
   // snapshot is alive — subprocess is still running, just no Claude output
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, aliveSnapshot(), now),
@@ -216,7 +223,7 @@ test("does NOT trigger when subprocess has recent raw activity despite no parsed
   // Simulate: no parsed Claude messages for 6 minutes, but subprocess stdout
   // still producing data 30s ago (e.g. verbose tool output not yet parsed).
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000; // 6 min ago (parsed messages)
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000); // just past the threshold (parsed messages)
   // snapshot shows recent process-level activity
   const snap = aliveSnapshot({ lastProcessActivityAgeMs: 30_000, processActivityCount: 150 });
   assert.strictEqual(
@@ -228,9 +235,9 @@ test("does NOT trigger when subprocess has recent raw activity despite no parsed
 
 test("triggers when both parsed messages AND raw activity are stale", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
   // subprocess activity also stale
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000, processActivityCount: 50 });
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000, processActivityCount: 50 });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now),
     true,
@@ -240,7 +247,7 @@ test("triggers when both parsed messages AND raw activity are stale", () => {
 
 test("triggers when lastProcessActivityAgeMs is null (no activity tracking)", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
   const snap = aliveSnapshot({ lastProcessActivityAgeMs: null });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now),
@@ -257,7 +264,7 @@ test("triggers when lastProcessActivityAgeMs is null (no activity tracking)", ()
 
 test("raw activity suppresses soft-dead at 6min silence (below cap)", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000; // 6 min parsed silence
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000); // just past the threshold, parsed silence
   const snap = aliveSnapshot({ lastProcessActivityAgeMs: 10_000 }); // recent raw
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now),
@@ -306,11 +313,11 @@ test("parsed Claude event recent still prevents trigger regardless of raw activi
 test("diagnostic includes all expected fields", () => {
   const now = Date.now();
   const snap = aliveSnapshot();
-  const diag = buildSoftDeadDiagnostic("req_abc", now - 6 * 60 * 1000, snap, now);
+  const diag = buildSoftDeadDiagnostic("req_abc", now - (UPSTREAM_SOFT_DEAD_MS + 60_000), snap, now);
 
   assert.strictEqual(diag.requestId, "req_abc");
   assert.strictEqual(diag.reason, "upstream_soft_dead");
-  assert.ok(diag.silenceMs >= 6 * 60 * 1000);
+  assert.ok(diag.silenceMs >= UPSTREAM_SOFT_DEAD_MS + 60_000);
   assert.deepStrictEqual(diag.subprocess, snap);
   assert.ok(typeof diag.timestamp === "string"); // ISO string
 });
@@ -337,7 +344,7 @@ test("diagnostic includes optional context when provided", () => {
     processActivityCount: 42,
     watchdogAction: "kill" as const,
   };
-  const diag = buildSoftDeadDiagnostic("req_ctx", now - 6 * 60 * 1000, snap, now, ctx);
+  const diag = buildSoftDeadDiagnostic("req_ctx", now - (UPSTREAM_SOFT_DEAD_MS + 60_000), snap, now, ctx);
 
   assert.strictEqual(diag.context?.model, "claude-sonnet-4");
   assert.strictEqual(diag.context?.stream, true);
@@ -348,7 +355,7 @@ test("diagnostic includes optional context when provided", () => {
 test("diagnostic omits context field when not provided", () => {
   const now = Date.now();
   const snap = aliveSnapshot();
-  const diag = buildSoftDeadDiagnostic("req_no_ctx", now - 6 * 60 * 1000, snap, now);
+  const diag = buildSoftDeadDiagnostic("req_no_ctx", now - (UPSTREAM_SOFT_DEAD_MS + 60_000), snap, now);
 
   assert.strictEqual(diag.context, undefined);
 });
@@ -357,8 +364,11 @@ test("diagnostic omits context field when not provided", () => {
 // Descendant grace cap constant
 // ---------------------------------------------------------------------------
 
-test("DESCENDANT_GRACE_CAP_MS is exactly 10 minutes", () => {
-  assert.strictEqual(DESCENDANT_GRACE_CAP_MS, 10 * 60 * 1000);
+test("DESCENDANT_GRACE_CAP_MS is 30 minutes (2x the soft-dead threshold)", () => {
+  assert.strictEqual(DESCENDANT_GRACE_CAP_MS, 30 * 60 * 1000);
+  // The relationship is the actual invariant: at or below the threshold the
+  // descendant-suppression branch would be unreachable.
+  assert.ok(DESCENDANT_GRACE_CAP_MS > UPSTREAM_SOFT_DEAD_MS);
 });
 
 test("DESCENDANT_CPU_FLOOR is 0.5", () => {
@@ -383,8 +393,8 @@ function activeDescendants(overrides: Partial<DescendantInfo> = {}): DescendantI
 
 test("active descendants suppress soft-dead within grace cap", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000; // 6 min silence
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000); // just past the threshold
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   const desc = activeDescendants(); // running=2, cpu=15.5%
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, desc),
@@ -395,8 +405,8 @@ test("active descendants suppress soft-dead within grace cap", () => {
 
 test("descendants with zero CPU do NOT suppress soft-dead", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   const desc = activeDescendants({ totalCpuPct: 0.0 });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, desc),
@@ -407,8 +417,8 @@ test("descendants with zero CPU do NOT suppress soft-dead", () => {
 
 test("descendants with very low CPU (< 0.5%) do NOT suppress soft-dead", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   const desc = activeDescendants({ totalCpuPct: 0.3 });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, desc),
@@ -419,8 +429,8 @@ test("descendants with very low CPU (< 0.5%) do NOT suppress soft-dead", () => {
 
 test("zombie descendants (running=0) do NOT suppress soft-dead", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   const desc = activeDescendants({ running: 0, totalCpuPct: 0.0 });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, desc),
@@ -455,8 +465,8 @@ test("descendants suppress at grace_cap - 1ms", () => {
 
 test("null descendants do not suppress (treated as unavailable)", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, null),
     true,
@@ -466,8 +476,8 @@ test("null descendants do not suppress (treated as unavailable)", () => {
 
 test("undefined descendants do not suppress (backward compat)", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, undefined),
     true,
@@ -488,8 +498,8 @@ test("descendants do NOT override hard-dead", () => {
 
 test("empty descendants (count=0) do not suppress", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   const desc: DescendantInfo = { count: 0, running: 0, totalCpuPct: 0, totalRssKb: 0, pids: [], sampledAt: now };
   assert.strictEqual(
     shouldTriggerSoftDead(lastClaudeActivityAt, snap, now, desc),
@@ -537,7 +547,7 @@ test("diagnostic context includes descendant fields when provided", () => {
   const now = Date.now();
   const snap = aliveSnapshot();
   const desc = activeDescendants();
-  const diag = buildSoftDeadDiagnostic("req_desc", now - 6 * 60 * 1000, snap, now, {
+  const diag = buildSoftDeadDiagnostic("req_desc", now - (UPSTREAM_SOFT_DEAD_MS + 60_000), snap, now, {
     model: "claude-sonnet-4",
     descendantCount: desc.count,
     descendantCpuPct: desc.totalCpuPct,
@@ -552,8 +562,8 @@ test("diagnostic context includes descendant fields when provided", () => {
 
 test("stale descendant sample does not suppress soft-dead", () => {
   const now = Date.now();
-  const lastClaudeActivityAt = now - 6 * 60 * 1000;
-  const snap = aliveSnapshot({ lastProcessActivityAgeMs: 6 * 60 * 1000 });
+  const lastClaudeActivityAt = now - (UPSTREAM_SOFT_DEAD_MS + 60_000);
+  const snap = aliveSnapshot({ lastProcessActivityAgeMs: UPSTREAM_SOFT_DEAD_MS + 60_000 });
   // Sample taken 2 minutes ago — exceeds DESCENDANT_SAMPLE_MAX_AGE_MS (60s)
   const desc = activeDescendants({ sampledAt: now - 120_000 });
   assert.strictEqual(
