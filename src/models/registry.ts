@@ -34,6 +34,26 @@ export interface ClaudeModelDefinition {
 
 export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
   {
+    // Opus 4.8 — flagship Opus, gleicher 1M-Context + Opus-4.8-Pricing wie 4.7
+    // (input $5 / output $25 / cache-write $6.25 / cache-read $0.5 pro Mtok).
+    // Hinzugefuegt Welle 6 (v0.19-Migration) aus mehdic-Base-Commit 9721fb5,
+    // adaptiert an die registry.ts dieses Forks. Die Default-Aliase 'opus'/'best'
+    // bleiben auf 4-7, bis die Hermes-Config bewusst umschaltet (siehe
+    // hermes-v019-upgrade-plan.md) — Phase 1 ist rein additiv.
+    id: 'claude-opus-4-8',
+    name: 'Claude Opus 4.8',
+    contextWindow: 1_000_000,
+    maxOutputTokens: 8192,
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinkingSupported: true,
+    oneMillionContextVariant: false,
+    aliases: [
+      'opus-4-8',
+      'claude-proxy/claude-opus-4-8',
+      'claude-code-cli/claude-opus-4-8',
+    ],
+  },
+  {
     // Opus 4.7 has a native 1M context window — no beta header required
     // (Anthropic flipped this from gated Q1 2026 to standard). Variants
     // pathway preserved for 4.6 models that still need context-1m-2025-08-07.
