@@ -257,6 +257,14 @@ async function cold(
   // policy and no per-request effort override is set. Both disallowedTools and
   // effort must be baked into the spawn args, so those requests get a dedicated
   // process rather than a pre-initialized generic one.
+  //
+  // Der Init-Pool könnte diese Konfigurationen seit dem M2-Fix technisch auch
+  // vorhalten (er schlüsselt nach der vollständigen Spawn-Konfiguration).
+  // Bewusst nicht: die Flags stammen hier aus dem Client-Body, der Schlüsselraum
+  // wäre offen, und jeder Einzelaufruf würde einen 240-MB-Prozess parken, der
+  // die Slots der wiederkehrenden Konfigurationen verdrängt. Der Vorrat lohnt
+  // nur bei einer kleinen, festen Zahl von Konfigurationen — wie beim
+  // isolierten Profil, wo der Server die Flags setzt.
   const needsDedicated = (options.disallowedTools && options.disallowedTools.length > 0)
     || !!options.effort
     || options.thinking !== undefined

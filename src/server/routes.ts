@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from "uuid";
 import { ClaudeSubprocess } from "../subprocess/manager.js";
 import { acquireSubprocess, type AcquireOptions } from "../subprocess/pool.js";
 import { acquireSession, returnSession, discardSession } from "../subprocess/session-pool.js";
-import { acquirePreInit, acquireBareSlot } from "../subprocess/init-pool.js";
+import { acquirePreInit } from "../subprocess/init-pool.js";
 import { getProfile, type Profile } from "./profiles.js";
 import { StreamJsonSubprocess } from "../subprocess/stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
@@ -257,46 +257,39 @@ function recordSessionModeRejected(mode: ResolvedSessionOptions["mode"] | "stick
   stickyPoolCounters.modeRejected[mode]++;
 }
 
-async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string, isolateCwd?: boolean, injectOAuthEnv?: boolean): Promise<StreamJsonSubprocess> {
+/**
+ * Acquire a subprocess for a stateless (single-shot) stream-json request.
+ *
+ * Exported so the pool-routing decision can be tested directly: the routing
+ * gate below is the part that decides warm-vs-cold, and it used to be
+ * untestable from outside without driving a full HTTP request.
+ */
+export async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string, isolateCwd?: boolean, injectOAuthEnv?: boolean): Promise<StreamJsonSubprocess> {
   // Stateless always cold-spawns; charge a token if a callerKey is provided.
   if (callerKey) {
     const limit = consumeColdSpawnToken(callerKey);
     if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
   }
-  // Isolated-profile fast path: when bare + isolateCwd + injectOAuthEnv are
-  // all set, the request is bound to the isolated profile (e.g. Honcho route).
-  // Use the bare-init-pool so subsequent calls skip the ~5s cold-start.
-  // System prompt is per-request (not part of pool init), so the pool is
-  // safe to share across requests that all share the bare/isolated/oauth
-  // triple.
+  // Isolated-profile path: when bare + isolateCwd + injectOAuthEnv are all set,
+  // the request is bound to the isolated profile (e.g. Honcho route). Diese
+  // Aufrufe kommen in dichten Schüben — 96 % folgen binnen 60 s auf den
+  // vorherigen —, ein Vorrat greift also bei nahezu allen.
+  //
+  // Hier stand früher eine Bedingung, die einen Pool-Treffer nur ohne jedes
+  // Flag zuließ. Sie konnte nie zutreffen: das Profil merged oben acht
+  // forceDisallowedTools hinein, und `response_format` erzeugt einen
+  // System-Prompt. Beides sind Spawn-Argumente, ein warmer Prozess kann sie
+  // nicht nachträglich bekommen — genau deshalb schlüsselt der Init-Pool jetzt
+  // nach der vollständigen Spawn-Konfiguration statt nach "keine Flags". Die
+  // Flags müssen nicht mehr leer sein, sie müssen nur zum Slot passen; das
+  // Prüfen übernimmt der Pool an den tatsächlich verwendeten Werten.
   if (bare && isolateCwd && injectOAuthEnv) {
-    // Bare-pool slots are spawned without any per-request flags. A pool hit
-    // is only safe when the caller's flags match the slot's spawn args
-    // exactly. systemPrompt in particular is a spawn arg (--system-prompt),
-    // not a stdin field — a warm slot spawned without --system-prompt can
-    // never carry a request-time system_prompt, so any caller with one MUST
-    // cold-spawn.
-    if (
-      disallowedTools.length === 0 &&
-      !effort &&
-      thinking === undefined &&
-      !debug &&
-      maxBudgetUsd === undefined &&
-      !permissionMode &&
-      !systemPrompt &&
-      !appendSystemPrompt &&
-      !agent &&
-      !agents &&
-      !jsonSchema &&
-      maxTurns === undefined
-    ) {
-      return acquireBareSlot(model);
-    }
-    // Pool-incompatible: cold-spawn with the full flag set below. We don't
-    // pre-acquire-then-kill here because the bare pool may not yet hold a
-    // slot (first request), and pre-acquiring would force a redundant spawn.
+    return acquirePreInit(model, { disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv });
   }
   if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv) return acquirePreInit(model);
+  // Übrige Kombinationen: einmaliger Prozess. Der Pool könnte sie technisch
+  // auch halten, aber ihre Flags kommen aus dem Client-Body — der Schlüsselraum
+  // wäre offen, und beliebige Fremdaufrufe würden die Honcho-Slots verdrängen.
   const subprocess = new StreamJsonSubprocess();
   await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv });
   return subprocess;

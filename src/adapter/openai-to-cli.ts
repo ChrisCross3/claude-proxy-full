@@ -391,6 +391,107 @@ export function messagesToPrompt(
 const FORCED_JSON_SCHEMA_MAX_BYTES = 8192;
 
 /**
+ * Marker key injected into a hard-reduced schema so the model - and anyone
+ * reading a captured prompt - can see that top-level fields were dropped.
+ * `x-` prefixed keys are the conventional JSON-Schema extension point, so this
+ * does not collide with real schema vocabulary.
+ */
+const SCHEMA_REDUCED_KEY = "x-schema-reduced";
+
+/**
+ * Top-level schema keys that survive a reduction. Everything else (titles,
+ * long descriptions, $defs, examples) is dropped first - it is decoration for
+ * the deriver-style extraction Honcho does.
+ */
+const KEPT_TOP_LEVEL_KEYS = ["type", "required", "additionalProperties"] as const;
+
+/** Reduce one schema node to its type-level skeleton (type, enum, item type). */
+function typeSkeleton(node: unknown): Record<string, unknown> {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return {};
+  const n = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  if (n.type !== undefined) out.type = n.type;
+  if (Array.isArray(n.enum)) out.enum = n.enum;
+  if (n.items !== undefined) out.items = typeSkeleton(n.items);
+  return out;
+}
+
+function reducedNote(kept: number, total: number): string {
+  return `schema exceeded ${FORCED_JSON_SCHEMA_MAX_BYTES} bytes; showing ${kept} of ${total} top-level properties, nested detail omitted`;
+}
+
+/**
+ * Fit a serialized JSON Schema into `maxBytes` **without ever emitting a
+ * partial JSON value**. Slicing the serialization mid-field (the old
+ * behaviour) handed the model syntactically broken JSON, Honcho got unusable
+ * output back, and the only trace was a console line nobody reads.
+ *
+ * Three steps, each of which produces a complete JSON document:
+ *   0. the full schema, if it already fits;
+ *   1. the top-level shape with every property reduced to its type - that is
+ *      what the extraction actually needs (field names + types + required);
+ *   2. as many type-only properties as the budget allows, plus a marker key
+ *      stating how many were dropped. Always fits: the marker alone is tiny.
+ */
+function reduceSchemaToFit(
+  schema: Record<string, unknown>,
+  serialized: string,
+  maxBytes: number,
+): { text: string; reduced: boolean } {
+  if (serialized.length <= maxBytes) return { text: serialized, reduced: false };
+
+  const propsRaw = schema.properties;
+  const props =
+    propsRaw && typeof propsRaw === "object" && !Array.isArray(propsRaw)
+      ? (propsRaw as Record<string, unknown>)
+      : undefined;
+
+  // Step 1: full top-level shape, properties collapsed to their types.
+  const skeleton: Record<string, unknown> = {};
+  for (const key of KEPT_TOP_LEVEL_KEYS) {
+    if (schema[key] !== undefined) skeleton[key] = schema[key];
+  }
+  if (props) {
+    const collapsed: Record<string, unknown> = {};
+    for (const [name, node] of Object.entries(props)) collapsed[name] = typeSkeleton(node);
+    skeleton.properties = collapsed;
+  }
+  const level1 = JSON.stringify(skeleton);
+  if (level1.length <= maxBytes) return { text: level1, reduced: true };
+
+  // Step 2: greedily keep whole properties until the budget (minus room for
+  // the marker) is used up. `required` is dropped here - it would reference
+  // fields that are no longer listed.
+  const total = props ? Object.keys(props).length : 0;
+  const reserve = JSON.stringify({ [SCHEMA_REDUCED_KEY]: reducedNote(total, total) }).length + 1;
+  const kept: Record<string, unknown> = {};
+  const partial: Record<string, unknown> = {};
+  if (schema.type !== undefined) partial.type = schema.type;
+  partial.properties = kept;
+  let keptCount = 0;
+  if (props) {
+    for (const [name, node] of Object.entries(props)) {
+      kept[name] = typeSkeleton(node);
+      if (JSON.stringify(partial).length + reserve > maxBytes) {
+        delete kept[name];
+        break;
+      }
+      keptCount++;
+    }
+  }
+  partial[SCHEMA_REDUCED_KEY] = reducedNote(keptCount, total);
+  const level2 = JSON.stringify(partial);
+  if (level2.length <= maxBytes) return { text: level2, reduced: true };
+
+  // Pathological input (e.g. a gigantic `type` value): emit the smallest
+  // complete document we can still stand behind.
+  return {
+    text: JSON.stringify({ type: "object", [SCHEMA_REDUCED_KEY]: reducedNote(0, total) }),
+    reduced: true,
+  };
+}
+
+/**
  * Convert an OpenAI `response_format` (Structured Outputs) into an aggressive
  * Claude `--system-prompt` string. Used by the "isolated"-profile route to
  * bridge the OpenAI-to-Anthropic format gap: Anthropic CLI has no native
@@ -424,22 +525,39 @@ export function responseFormatToSystemPrompt(raw: unknown): string | undefined {
   }
   if (serialized.length === 0 || serialized === "{}") return undefined;
 
-  let schemaText = serialized;
-  if (schemaText.length > FORCED_JSON_SCHEMA_MAX_BYTES) {
-    schemaText = schemaText.slice(0, FORCED_JSON_SCHEMA_MAX_BYTES);
+  const { text: schemaText, reduced } = reduceSchemaToFit(
+    schemaRaw as Record<string, unknown>,
+    serialized,
+    FORCED_JSON_SCHEMA_MAX_BYTES,
+  );
+  if (reduced) {
     console.error(
-      `[openai-to-cli] responseFormatToSystemPrompt: schema truncated from ${serialized.length} to ${FORCED_JSON_SCHEMA_MAX_BYTES} bytes` +
+      `[openai-to-cli] responseFormatToSystemPrompt: schema reduced from ${serialized.length} to ${schemaText.length} bytes` +
         (typeof wrapper.name === "string" ? ` (name=${wrapper.name})` : ""),
     );
   }
 
   const name = typeof wrapper.name === "string" && wrapper.name.length > 0 ? wrapper.name : "Response";
+  // The reduction is announced in the prompt itself, not through the return
+  // value: the signature is `string | undefined` and has several callers
+  // (openaiToCli plus the profile-bound routes), so widening it would be a
+  // breaking change for a rare edge case. The prompt is the one channel every
+  // caller already gets, it is what lands in captured traces, and the model
+  // needs the warning anyway. console.error stays as the operator-facing signal.
+  const notice = reduced
+    ? [
+        `NOTE: the schema below was REDUCED to its top-level structure (field names and types) ` +
+          `because the full schema exceeded ${FORCED_JSON_SCHEMA_MAX_BYTES} bytes. ` +
+          `Nested detail is omitted; still return valid JSON for the fields shown.`,
+      ]
+    : [];
   return [
     `You MUST respond with ONLY valid JSON matching the schema below.`,
     `No prose. No explanations. No commentary.`,
     `Markdown code fences are allowed but optional — the caller will strip them.`,
     `Start your response with the opening brace or bracket of the JSON value.`,
     `Schema name: ${name}`,
+    ...notice,
     `JSON Schema:`,
     schemaText,
   ].join("\n");
