@@ -11,11 +11,13 @@
  * allowlist defined in routes.ts classifyFallbackReason().
  *
  * Counters live where they're produced (poolCounters in session-pool.ts,
- * fallbackCounters in routes.ts) and we read them at scrape time.
+ * initPoolCounters in init-pool.ts, fallbackCounters in routes.ts) and we read
+ * them at scrape time.
  */
 
 import type { Request, Response } from "express";
 import { poolCounters, poolStats } from "../subprocess/session-pool.js";
+import { initPoolCounters, initPoolStats } from "../subprocess/init-pool.js";
 import { stickyPoolCounters, stickyPoolStats, resetStickyPoolForTests } from "../subprocess/sticky-session-pool.js";
 import { fallbackCounters } from "./routes.js";
 import { defaultRuntime } from "../subprocess/runtime.js";
@@ -224,6 +226,40 @@ export function renderMetrics(): string {
   lines.push("# HELP claude_proxy_pool_cold_spawns_total Conversations that took the cold path.");
   lines.push("# TYPE claude_proxy_pool_cold_spawns_total counter");
   lines.push(`claude_proxy_pool_cold_spawns_total ${poolCounters.coldSpawns}`);
+
+  // claude_proxy_init_pool_* — pre-initialized subprocess pool ("Vorrat").
+  //
+  // These read initPoolCounters/initPoolStats() from init-pool.ts. They exist
+  // because the pool's hit rate was previously invisible: a dead pre-init
+  // branch survived 3.5 days precisely because "never hit" and "not measured"
+  // looked identical from outside. The counters are always emitted, including
+  // at zero, so a flat warm_hits series is a readable signal rather than an
+  // absent one.
+  const ips = initPoolStats();
+  lines.push("# HELP claude_proxy_init_pool_size Pre-initialized workers parked in the init pool.");
+  lines.push("# TYPE claude_proxy_init_pool_size gauge");
+  lines.push(`claude_proxy_init_pool_size{state="live"} ${ips.size}`);
+  lines.push(`claude_proxy_init_pool_size{state="max"} ${ips.max}`);
+
+  lines.push("# HELP claude_proxy_init_pool_ttl_seconds Idle TTL after which a parked init-pool slot is evicted.");
+  lines.push("# TYPE claude_proxy_init_pool_ttl_seconds gauge");
+  lines.push(`claude_proxy_init_pool_ttl_seconds ${(ips.ttlMs / 1000).toFixed(3)}`);
+
+  lines.push("# HELP claude_proxy_init_pool_warm_hits_total Acquires served from an already-initialized init-pool slot.");
+  lines.push("# TYPE claude_proxy_init_pool_warm_hits_total counter");
+  lines.push(`claude_proxy_init_pool_warm_hits_total ${initPoolCounters.warmHits}`);
+
+  lines.push("# HELP claude_proxy_init_pool_cold_spawns_total Acquires that had to spawn a fresh subprocess.");
+  lines.push("# TYPE claude_proxy_init_pool_cold_spawns_total counter");
+  lines.push(`claude_proxy_init_pool_cold_spawns_total ${initPoolCounters.coldSpawns}`);
+
+  lines.push("# HELP claude_proxy_init_pool_discarded_total Parked slots discarded as unfit (dead process, token rotation or expiry window).");
+  lines.push("# TYPE claude_proxy_init_pool_discarded_total counter");
+  lines.push(`claude_proxy_init_pool_discarded_total ${initPoolCounters.discarded}`);
+
+  lines.push("# HELP claude_proxy_init_pool_evictions_total Parked slots evicted for idle TTL or to honor the slot cap.");
+  lines.push("# TYPE claude_proxy_init_pool_evictions_total counter");
+  lines.push(`claude_proxy_init_pool_evictions_total ${initPoolCounters.evictions}`);
 
   // claude_proxy_sticky_pool_* — explicit opt-in sticky session pool.
   const stickyStats = stickyPoolStats();
