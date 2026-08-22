@@ -66,9 +66,30 @@ export interface SubprocessOptions {
   bare?: boolean;
   /** Disable slash commands in subprocess. Part of fingerprint. */
   disableSlashCommands?: boolean;
-  /** JSON Schema for structured output (print-mode only). Not in fingerprint. */
+  /**
+   * JSON Schema for structured output; mapped to claude --json-schema.
+   * Requires the headless run (--print), NOT a particular --output-format:
+   * buildArgs spawns --print together with --output-format stream-json and
+   * pushes this flag into that same argv. Enforcement is real since CLI
+   * v2.1.205 (pin: 2.1.232) -- before that the CLI ignored an invalid schema
+   * silently. Anthropic's docs show the flag only next to --output-format
+   * json; that is a documentation gap, not a limit.
+   *
+   * No pool fingerprint on this path: pool.ts spawns one cold process per
+   * request and keeps nothing warm. The fingerprint rules apply to the
+   * stream-json options instead -- init-pool.ts (configKey) takes jsonSchema
+   * into the pool key, session-pool.ts (needsDedicated) forces a dedicated
+   * process for it.
+   */
   jsonSchema?: Record<string, unknown>;
-  /** Cap agentic turns (print-mode only). Not in fingerprint. */
+  /**
+   * Cap agentic turns; mapped to claude --max-turns. Headless-only flag,
+   * independent of --output-format (buildArgs pushes it into the same
+   * --output-format stream-json argv as --json-schema). No pool fingerprint
+   * here either (pool.ts spawns cold per request); on the stream-json path
+   * init-pool.ts (configKey) keys it and session-pool.ts (needsDedicated)
+   * forces a dedicated process.
+   */
   maxTurns?: number;
   /**
    * Inject Anthropic OAuth access token (read from ~/.claude/.credentials.json)

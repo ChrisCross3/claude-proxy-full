@@ -126,7 +126,8 @@ export interface OpenAIChatRequest {
   json_schema?: Record<string, unknown>;
   /**
    * Hard cap on the number of agentic turns the subprocess may take before
-   * stopping. Mapped to claude --max-turns (print-mode only). Positive
+   * stopping. Mapped to claude --max-turns. Print mode in the CLI's sense
+   * (`-p`), which includes `--output-format stream-json`. Positive
    * integer; non-integer/zero/negative values are silently dropped.
    */
   max_turns?: number;
@@ -339,9 +340,14 @@ export interface ResponsesRequest {
   bare?: boolean;
   /** Disable slash commands in the subprocess. */
   disable_slash_commands?: boolean;
-  /** JSON Schema the response must conform to (print-mode only). */
+  /**
+   * JSON Schema the response must conform to; drives claude --json-schema.
+   * The flag needs the headless run, not --output-format json -- the proxy
+   * spawns it alongside --output-format stream-json. Real enforcement since
+   * CLI v2.1.205.
+   */
   json_schema?: Record<string, unknown>;
-  /** Cap agentic turns (print-mode only). */
+  /** Cap agentic turns; drives claude --max-turns. Headless-only flag, independent of --output-format. */
   max_turns?: number;
   claude_proxy?: ClaudeProxyRequestExtension;
 }

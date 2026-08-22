@@ -78,7 +78,7 @@ Routen sind mit und ohne `/v1` gemountet, damit sowohl OpenAI-SDKs als auch einf
 | `/isolated/chat/completions`, `/v1/isolated/chat/completions` | POST | Zustandslose `--bare`-Single-Shot-Completions (non-streaming). |
 | `/responses`, `/v1/responses` | POST | Praxistaugliche Responses-API-Kompatibilität. |
 | `/pricing`, `/v1/pricing` | GET | Pricing-Snapshot für Kostenschätzungen. |
-| `/metrics` | GET | Prometheus-Style-Metriken. |
+| `/metrics` | GET | Prometheus-Style-Metriken. Vollstaendiger Katalog: [`docs/metrics.md`](docs/metrics.md). |
 | `/traces`, `/traces/:id` | GET | Localhost-only Trace-Endpoints, wenn Tracing aktiv ist. |
 
 ## Modelle

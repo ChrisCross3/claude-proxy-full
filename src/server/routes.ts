@@ -2152,9 +2152,10 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
       });
     }
   } finally {
-    // Stateless: always kill the subprocess. The bare-init-pool will refill
-    // a fresh slot in the background. StreamJsonSubprocess.kill() is
-    // idempotent — re-calling on an already-killed proc is safe.
+    // Stateless: always kill the subprocess. The init-pool will refill a
+    // fresh slot for this spawn configuration in the background.
+    // StreamJsonSubprocess.kill() is idempotent — re-calling on an
+    // already-killed proc is safe.
     subprocess.kill();
   }
 }

@@ -69,6 +69,14 @@ These variables affect the persistent `stream-json` runtime.
 | `CLAUDE_PROXY_UPSTREAM_SOFT_DEAD_MS` | code default | Soft-dead threshold for upstream silence detection. Usually leave unset. |
 | `CLAUDE_PROXY_DESCENDANT_GRACE_MS` | code default | Grace window for descendant/tool process handling. Usually leave unset. |
 
+## Isolated mode
+
+`POST /v1/isolated/chat/completions` spawns the CLI with `--bare` and with a working directory outside the proxy's own, so that a `CLAUDE.md` walk-up cannot pick up the caller's workspace files.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CLAUDE_PROXY_ISOLATED_CWD` | OS temp directory | Working directory used for spawns that ask for cwd isolation. Only those spawns are affected; every other spawn keeps the proxy's own cwd. Point it at a directory that holds no `CLAUDE.md`, otherwise it defeats the purpose of the isolation. |
+
 ## Opt-in sticky sessions
 
 Sticky sessions keep a specific live Claude Code CLI `stream-json` worker attached to an explicit caller-provided session key. This is useful for agent/conversation warm state, but it is deliberately opt-in: ordinary OpenAI-compatible requests continue through the default pool unchanged.

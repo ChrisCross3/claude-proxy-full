@@ -56,7 +56,7 @@ Streaming / sticky:
 | `src/server/standalone.ts` | Express-App, Port-Bind, `preWarm()` |
 | `src/server/trust-proxy.ts` | `configureTrustProxy(app)` aus `CLAUDE_PROXY_TRUST_PROXY` (default `false`). Wird im Bootstrap nach `express()` aufgerufen — entscheidet, ob `X-Forwarded-For` für `req.ip` und die Cold-Spawn-Caller-Key-Extraction zählt. |
 | `src/server/routes.ts` | Route-Handler für `/v1/*`, `/models`, `/metrics` |
-| `src/server/metrics.ts` | Prometheus-Counter/Histogram, `KNOWN_MODEL_LABELS` |
+| `src/server/metrics.ts` | Prometheus-Counter/Histogram, `canonicalizeMetricModel()`; Katalog aller Serien: [`docs/metrics.md`](docs/metrics.md) |
 | `src/server/middleware/auth.ts` | Bearer-Token-Check (optional, `CLAUDE_PROXY_API_KEY`) |
 | `src/server/middleware/cors.ts` | CORS-Header |
 | `src/server/middleware/cold-spawn-limit.ts` | Pro-Caller-Rate-Limit für print-mode-Spawns |

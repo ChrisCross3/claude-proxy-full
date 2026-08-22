@@ -53,9 +53,14 @@ export interface CliInput {
   bare?: boolean;
   /** Disable slash commands. */
   disableSlashCommands?: boolean;
-  /** JSON Schema for structured output (print-mode only). */
+  /**
+   * JSON Schema for structured output; mapped to claude --json-schema.
+   * Headless-only, independent of --output-format -- verified against the
+   * pinned 2.1.232 with --output-format stream-json, see the spawn-shape note
+   * on responseFormatToJsonSchema below.
+   */
   jsonSchema?: Record<string, unknown>;
-  /** Cap agentic turns (print-mode only). */
+  /** Cap agentic turns; mapped to claude --max-turns. Headless-only, independent of --output-format. */
   maxTurns?: number;
   /** Inject Anthropic OAuth token as ANTHROPIC_API_KEY (server-side only, set by profile). */
   injectOAuthEnv?: boolean;
@@ -525,9 +530,9 @@ function reduceSchemaToFit(
  *   1
  *
  * Same behaviour in `--output-format json`. Since the isolated route spawns
- * through the warm bare-init-pool, that exit-1 surfaces to the caller as a
- * failed acquire, not as a degraded answer. So a schema naming an unloadable
- * dialect must NOT go down the native path — it keeps the prompt fallback.
+ * through the init-pool's warm slot for its spawn configuration, that exit-1
+ * surfaces to the caller as a failed acquire, not as a degraded answer. So a
+ * schema naming an unloadable dialect must NOT go down the native path — it keeps the prompt fallback.
  *
  * Absence of `$schema` is the common case and is fine: Pydantic v2's
  * `model_json_schema()` deliberately omits the key, and Honcho passes that

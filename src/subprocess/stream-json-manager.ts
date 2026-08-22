@@ -143,7 +143,21 @@ export interface StreamJsonOptions {
   bare?: boolean;
   /** Disable slash commands in subprocess. Part of fingerprint. */
   disableSlashCommands?: boolean;
-  /** JSON Schema for structured output (print-mode only). Not in fingerprint. */
+  /**
+   * JSON Schema for structured output; mapped to `claude --json-schema` at
+   * spawn time (see the note at the push site for why this manager's
+   * stream-json transport is no obstacle).
+   *
+   * Pool handling differs between the two pools, so always name the pool when
+   * reasoning about it:
+   *   - SessionPool: NOT part of the slot fingerprint, and it never reuses a
+   *     warm slot for such a request anyway — `needsDedicated` in
+   *     session-pool.ts routes every request carrying a jsonSchema to a
+   *     dedicated process.
+   *   - InitPool: part of the slot key. `configKey` in init-pool.ts hashes
+   *     jsonSchema together with the rest of the spawn configuration, so two
+   *     different schemas can each hold their own pre-warmed slot.
+   */
   jsonSchema?: Record<string, unknown>;
   /** Cap agentic turns (print-mode only). Not in fingerprint. */
   maxTurns?: number;
@@ -278,7 +292,22 @@ export class StreamJsonSubprocess extends EventEmitter {
         requestedValueLabel: "true",
       });
     }
-    // JSON Schema for structured output (print-mode only upstream).
+    // Structured output through the CLI's own schema validator.
+    //
+    // Upstream calls --json-schema "print mode only", which reads like a
+    // conflict with the --output-format stream-json this manager fixes above.
+    // It is not: the restriction concerns the headless run, not the output
+    // format. The docs only ever show the flag next to --output-format json,
+    // so going by the docs alone the pairing used here looks inadmissible.
+    // Measured on the pinned CLI 2.1.232 with this exact spawn shape it is
+    // not — the CLI installs its synthetic StructuredOutput tool and the
+    // validated JSON arrives in the result message. The evidence sits next to
+    // responseFormatToJsonSchema in openai-to-cli.ts.
+    //
+    // Enforcement is only real from v2.1.205; earlier CLIs silently ignored an
+    // invalid schema and returned unstructured text. Our pin is above that, so
+    // `strict` below is the correct setting — a CLI that cannot offer the flag
+    // is a broken pin, not a case for a quiet downgrade.
     if (options.jsonSchema) {
       await pushClaudeFlagIfSupported(args, "--json-schema", {
         value: JSON.stringify(options.jsonSchema),
