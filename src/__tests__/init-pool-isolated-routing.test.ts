@@ -28,10 +28,17 @@ import { acquireStatelessStreamJson } from "../server/routes.js";
 import { ISOLATED_PROFILE } from "../server/profiles.js";
 import { openaiToCli } from "../adapter/openai-to-cli.js";
 import { StreamJsonSubprocess, type StreamJsonOptions } from "../subprocess/stream-json-manager.js";
-import { initPoolCounters, initPoolStats, __resetInitPoolForTests } from "../subprocess/init-pool.js";
+import { acquirePreInit, initPoolCounters, initPoolStats, __resetInitPoolForTests, type PoolSpawnConfig } from "../subprocess/init-pool.js";
 
 /** Spawn-Optionen jedes (gemockten) start()-Aufrufs, in Reihenfolge. */
 const spawns: StreamJsonOptions[] = [];
+
+/**
+ * Spawn-Optionen je Prozess-Instanz. Die Reihenfolge in `spawns` genuegt nicht,
+ * um zu pruefen, *welchen* Prozess der Vorrat ausliefert — dafuer braucht es den
+ * Rueckbezug vom zurueckgegebenen Objekt auf seine Spawn-Argumente.
+ */
+const spawnOptionsOf = new WeakMap<object, StreamJsonOptions>();
 
 let savedOauthToken: string | undefined;
 
@@ -45,6 +52,7 @@ before(() => {
 
   mock.method(StreamJsonSubprocess.prototype, "start", async function (this: any, opts: StreamJsonOptions) {
     spawns.push(opts);
+    spawnOptionsOf.set(this, opts);
     this.model = opts.model;
     this.spawnedAt = Date.now();
   });
@@ -226,4 +234,102 @@ test("anderes Schema bekommt den Slot des ersten Schemas nicht", async () => {
     warmHitsBefore,
     "ein Slot mit fremdem System-Prompt darf nicht ausgeliefert werden",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Das Arbeitsverzeichnis gehoert in den Schluessel
+// ---------------------------------------------------------------------------
+// `PoolSpawnConfig` liess `cwd` aus, `configKey` kannte es folglich nicht —
+// aber `spawn()` reicht die Konfiguration ungefiltert an `start()` weiter
+// (`{ ...cfg, model }`), das Verzeichnis kam also sehr wohl beim Prozess an.
+// Zwei Aufrufe, die sich nur im Verzeichnis unterscheiden, teilten sich damit
+// einen Slot: der zweite bekam einen Prozess, der im Verzeichnis des ersten
+// gespawnt wurde.
+//
+// Das ist keine Kosmetik. Die claude-CLI wertet ihr Arbeitsverzeichnis *beim
+// Start* aus — der CLAUDE.md-Walk-up ("files in the directory hierarchy above
+// the working directory are loaded at launch"), die Projekt-Settings samt
+// Hooks und das Auto-Memory-Verzeichnis haengen daran und werden waehrend der
+// Sitzung nicht neu bestimmt. Ein vorgewaermter Prozess bringt sein
+// Verzeichnis also mit; ein Slot aus dem falschen Verzeichnis traegt fremden
+// Projektkontext in eine Anfrage, deren Zweck gerade die Isolation ist.
+//
+// Der Schluessel nimmt nicht das rohe `cwd`, sondern das *wirksame* Verzeichnis
+// (`resolveCwd`): bei `isolateCwd` ist das eine Konstante, ein mitgegebenes
+// `cwd` ist dann bedeutungslos und darf den Schluesselraum nicht aufblaehen.
+
+const DIR_A = "/srv/tenant-a";
+const DIR_B = "/srv/tenant-b";
+
+/**
+ * Baut eine Pool-Konfiguration mit `cwd` so, wie ein Aufrufer es taete, der
+ * seine Optionen weiterreicht: als breiteres Objekt statt als Objekt-Literal.
+ * TypeScript prueft ueberzaehlige Felder nur bei Literalen — das `Omit<…,
+ * "cwd">` im Typ ist deshalb keine Sperre, sondern nur eine Bitte.
+ */
+function poolConfigInDir(cwd: string): PoolSpawnConfig {
+  const wider: Pick<StreamJsonOptions, "cwd" | "disableSlashCommands"> = { cwd, disableSlashCommands: true };
+  return wider;
+}
+
+/** Verzeichnis, in dem dieser Prozess tatsaechlich gespawnt wurde. */
+function spawnCwdOf(sub: StreamJsonSubprocess): string | undefined {
+  return spawnOptionsOf.get(sub)?.cwd;
+}
+
+test("zwei Verzeichnisse teilen sich keinen Slot", async () => {
+  await acquirePreInit("claude-haiku-4-5", poolConfigInDir(DIR_A));
+  await drainBackgroundRefill();
+  assert.equal(initPoolStats().size, 1, "Vorrat haelt einen Slot fuer Verzeichnis A");
+  assert.equal(spawns.at(-1)?.cwd, DIR_A, "der geparkte Prozess steht in Verzeichnis A");
+
+  const warmHitsBefore = initPoolCounters.warmHits;
+  const forB = await acquirePreInit("claude-haiku-4-5", poolConfigInDir(DIR_B));
+
+  assert.equal(
+    spawnCwdOf(forB),
+    DIR_B,
+    "der ausgelieferte Prozess muss im angeforderten Verzeichnis stehen",
+  );
+  assert.equal(
+    initPoolCounters.warmHits,
+    warmHitsBefore,
+    "ein Slot aus einem fremden Verzeichnis darf nicht ausgeliefert werden",
+  );
+});
+
+test("dasselbe Verzeichnis wird weiterhin warm bedient", async () => {
+  await acquirePreInit("claude-haiku-4-5", poolConfigInDir(DIR_A));
+  await drainBackgroundRefill();
+
+  const second = await acquirePreInit("claude-haiku-4-5", poolConfigInDir(DIR_A));
+  assert.equal(initPoolCounters.warmHits, 1, "gleiches Verzeichnis = gleicher Schluessel");
+  assert.equal(spawnCwdOf(second), DIR_A);
+});
+
+test("fehlendes cwd und das eigene Verzeichnis sind derselbe Schluessel", async () => {
+  // Sonst haelte der Vorrat zwei Slots fuer dasselbe Verzeichnis: einen fuer
+  // `cwd: undefined` und einen fuer den ausgeschriebenen Wert.
+  const implicit: PoolSpawnConfig = { disableSlashCommands: true };
+  await acquirePreInit("claude-haiku-4-5", implicit);
+  await drainBackgroundRefill();
+
+  await acquirePreInit("claude-haiku-4-5", poolConfigInDir(process.cwd()));
+  assert.equal(initPoolCounters.warmHits, 1, "beides meint dasselbe Verzeichnis");
+});
+
+test("bei isolateCwd bleibt das mitgegebene cwd ohne Wirkung auf den Schluessel", async () => {
+  // resolveCwd ignoriert `cwd`, sobald `isolateCwd` gesetzt ist — beide Aufrufe
+  // landen im selben tmpdir. Wuerde der Schluessel das rohe `cwd` nehmen,
+  // zersplitterte genau der isolierte Pfad in beliebig viele Slots.
+  const a: PoolSpawnConfig = { isolateCwd: true, ...poolConfigInDir(DIR_A) };
+  const b: PoolSpawnConfig = { isolateCwd: true, ...poolConfigInDir(DIR_B) };
+
+  await acquirePreInit("claude-haiku-4-5", a);
+  await drainBackgroundRefill();
+
+  await acquirePreInit("claude-haiku-4-5", b);
+  assert.equal(initPoolCounters.warmHits, 1, "isoliert = ein Verzeichnis, ein Slot");
+  await drainBackgroundRefill();
+  assert.equal(initPoolStats().size, 1, "kein zweiter Slot fuer dasselbe tmpdir");
 });

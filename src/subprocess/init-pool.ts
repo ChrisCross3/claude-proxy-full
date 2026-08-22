@@ -64,6 +64,7 @@
 import { createHash } from "crypto";
 import { StreamJsonSubprocess, type StreamJsonOptions } from "./stream-json-manager.js";
 import { stableStringify } from "./fingerprint.js";
+import { resolveCwd } from "./manager.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { hasCredentialsChangedSince, getCachedExpiresAtMs, clearDefaultResolverCache } from "../auth/credentials-resolver.js";
 
@@ -109,8 +110,20 @@ const SLOT_TTL_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 900_000;
 })();
 
-/** Alles, was `StreamJsonSubprocess.start()` als Spawn-Argument verarbeitet. */
-export type PoolSpawnConfig = Omit<StreamJsonOptions, "model" | "cwd">;
+/**
+ * Alles, was `StreamJsonSubprocess.start()` als Spawn-Argument verarbeitet.
+ * Nur `model` bleibt ausgenommen — das reist als eigenes Argument neben der
+ * Konfiguration.
+ *
+ * `cwd` war hier zunächst mit ausgenommen, ohne dass der Typ den Wert
+ * aufgehalten hätte: `spawn()` gibt die Konfiguration ungefiltert weiter
+ * (`{ ...cfg, model }`), und TypeScript prüft überzählige Felder nur bei
+ * Objekt-Literalen — ein Aufrufer, der ein breiteres Optionen-Objekt
+ * durchreicht, hat sein `cwd` jederzeit bis in den Spawn gebracht, während
+ * `configKey` es nicht sah. Der Typ hat das Feld also nur verschwiegen, nicht
+ * verhindert; jetzt steht es drin und geht in den Schlüssel ein.
+ */
+export type PoolSpawnConfig = Omit<StreamJsonOptions, "model">;
 
 interface Slot {
   sub: StreamJsonSubprocess;
@@ -191,6 +204,24 @@ export function __resetInitPoolForTests(): void {
  * `disallowedTools` wird sortiert, damit die Reihenfolge des Merges in
  * routes.ts den Schlüssel nicht verändert. Objekte gehen über stableStringify,
  * damit die Schlüsselreihenfolge egal ist.
+ *
+ * Das Arbeitsverzeichnis geht als *wirksames* Verzeichnis ein (`resolveCwd`),
+ * nicht als rohes `cfg.cwd`. Es muss überhaupt eingehen, weil die claude-CLI
+ * ihr Verzeichnis beim Start auswertet und nicht pro Anfrage: der
+ * CLAUDE.md-Walk-up über die Elternverzeichnisse, die Projekt-Settings samt
+ * Hooks und das Auto-Memory-Verzeichnis stehen fest, sobald der Prozess läuft.
+ * Ein vorgewärmter Prozess bringt sein Verzeichnis also mit — ein Slot aus dem
+ * falschen Verzeichnis trüge fremden Projektkontext in eine Anfrage, deren
+ * Zweck (`/v1/isolated`) gerade die Isolation ist.
+ *
+ * Und es muss das *aufgelöste* Verzeichnis sein, weil `resolveCwd` bei
+ * `isolateCwd` jedes mitgegebene `cwd` verwirft: alle isolierten Aufrufe teilen
+ * dasselbe tmpdir. Am rohen Wert geschlüsselt zersplitterte genau der isolierte
+ * Pfad in beliebig viele Slots, die auf denselben Prozess hinauslaufen — und der
+ * Vorrat ist gedeckelt (MAX_SLOTS, LRU). Nebenbei fallen `cwd: undefined` und
+ * das ausgeschriebene eigene Verzeichnis auf einen Schlüssel zusammen, statt
+ * zwei Slots für dasselbe Verzeichnis zu halten. Dieselbe Auflösung benutzt
+ * `start()` selbst, die beiden können also nicht auseinanderlaufen.
  */
 function configKey(model: ClaudeModel, cfg: PoolSpawnConfig): string {
   const canonical = {
@@ -210,6 +241,7 @@ function configKey(model: ClaudeModel, cfg: PoolSpawnConfig): string {
     maxTurns: cfg.maxTurns ?? null,
     injectOAuthEnv: cfg.injectOAuthEnv === true,
     isolateCwd: cfg.isolateCwd === true,
+    cwd: resolveCwd(cfg),
   };
   const h = createHash("sha256");
   h.update(model);
