@@ -58,8 +58,12 @@ These variables affect the persistent `stream-json` runtime.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CLAUDE_PROXY_PREWARM_MODELS` | `claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5` | Comma-separated models to pre-initialize at startup. |
-| `CLAUDE_PROXY_INIT_POOL` | enabled | Set `0` to disable the per-model init pool. |
+| `CLAUDE_PROXY_PREWARM_MODELS` | `claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5` | Comma-separated models to pre-initialize at startup. Startup prewarm covers the default configuration only. Isolated configurations cannot be warmed this early because their key includes a system prompt that only exists once a request arrives; they warm on first use instead — the first call per configuration spawns cold and refills in the background. |
+| `CLAUDE_PROXY_INIT_POOL` | enabled | Set `0` to disable the init pool. Slots are keyed per *configuration* — model plus a fingerprint of the full spawn configuration (disallowed tools, system prompt, JSON schema, `--bare`, and the rest) — not per model alone. |
+| `CLAUDE_PROXY_INIT_POOL_MAX` | `6` | Maximum parked subprocesses across all configurations. Reaching the cap evicts the least recently parked slot. A value that is not a positive integer falls back to the default. |
+| `CLAUDE_PROXY_INIT_POOL_TTL_MS` | `900000` | Idle TTL of a parked slot, in milliseconds. Expired slots are killed on the next acquire, so a configuration that goes quiet returns its memory (~240 MB per subprocess) instead of parking forever. A value that is not a positive integer falls back to the default. |
+| `CLAUDE_PROXY_BARE_POOL` | enabled | Set `0` to stop pre-warming the isolated (OAuth-injecting) configurations. The rest of the init pool is unaffected. Legacy name from the time of two separate pools; there is only one pool now. |
+| `CLAUDE_PROXY_BARE_POOL_SIZE` | unset | Off-switch only: `0` has the same effect as `CLAUDE_PROXY_BARE_POOL=0`. Any other value is parsed and then ignored — this has never been a slot count. |
 | `CLAUDE_PROXY_POOL_TTL_MS` | `600000` | Idle TTL for session-pool workers. Floored internally to avoid evicting during the prompt-cache window. |
 | `CLAUDE_PROXY_POOL_MAX` | `4` | Maximum live workers in the session pool. |
 | `CLAUDE_PROXY_UPSTREAM_SOFT_DEAD_MS` | code default | Soft-dead threshold for upstream silence detection. Usually leave unset. |

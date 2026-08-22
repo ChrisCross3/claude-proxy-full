@@ -102,10 +102,12 @@ Im Vergleich zum normalen Chat-Endpoint:
 
 - spawnt er die Claude-CLI mit `--bare` (kein Workspace, keine Auto-Memory, kein `CLAUDE.md`-Walk-up-Discovery; `cwd` ist ein Temp-Verzeichnis),
 - überbrückt er den Abo-OAuth-Token aus `~/.claude/.credentials.json` in `ANTHROPIC_API_KEY` für diesen `--bare`-Spawn (weil `--bare` weder OAuth noch OS-Keychain liest),
-- ist er freundlich zu `response_format: json_schema`-Requests (das Schema wird in einen aggressiven System-Prompt eingebettet, sodass Caller striktes JSON zurückbekommen),
+- setzt er `response_format: json_schema`-Requests auf die **native Schema-Durchsetzung der CLI** um (`claude --json-schema`): die CLI validiert die Antwort gegen das Schema und fragt bei Abweichung nach, statt striktes JSON nur per Prompt zu erbitten. Ein caller-eigener `system_prompt` bleibt dabei unangetastet. **Rückfall** ist der alte Weg — Schema in einen aggressiven System-Prompt eingebettet — und zwar nur für Schemata, die einen fremden Dialekt *deklarieren*: der Validator der CLI ist auf draft-07 festgenagelt, und ein fremder `$schema`-Wert bricht den Spawn mit Exit 1 ab. Schemata ohne `$schema` (u. a. alles aus Pydantic v2, also Honchos Fall) gehen nativ,
 - ist er **non-streaming** — für SSE den Endpoint `/v1/chat/completions` nutzen.
 
 Relevante Env-Vars: `CLAUDE_PROXY_BARE_POOL`, `CLAUDE_PROXY_BARE_POOL_SIZE`, `CLAUDE_PROXY_ISOLATED_CWD`.
+
+> **Zu den beiden `BARE_POOL`-Namen:** Einen eigenen „Bare-Pool" gibt es seit dem Init-Pool-Umbau nicht mehr — es gibt einen Pool, geschlüsselt nach Modell plus Fingerabdruck der vollständigen Spawn-Konfiguration; der isolierte Pfad ist darin bloß eine weitere Konfiguration. Die **Wirkung beider Schalter ist unverändert**: `CLAUDE_PROXY_BARE_POOL=0` schaltet das Vorwärmen der isolierten Konfigurationen ab und lässt den übrigen Vorrat in Ruhe, und `CLAUDE_PROXY_BARE_POOL_SIZE` wirkt ausschließlich als zweiter Aus-Schalter bei `0`. Keine Regression, nur ein ehrlicherer Name: **`SIZE` war auch vorher schon keine Größe** — der Wert wurde zwar geparst, aber nur gegen `=== 0` geprüft, und der alte Vorrat hielt ohnehin genau einen Slot je Modell. `SIZE=3` hat nie drei Prozesse warm gehalten. Die tatsächlichen Mengen-Regler heißen `CLAUDE_PROXY_INIT_POOL_MAX` und `CLAUDE_PROXY_INIT_POOL_TTL_MS` (siehe [docs/configuration.md](docs/configuration.md)).
 
 ### Embeddings sind außerhalb des Scopes
 
