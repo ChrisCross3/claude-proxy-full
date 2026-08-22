@@ -185,15 +185,26 @@ test("openclaw-config: in-flight dedup — parallel loads share one resolver cal
   });
 });
 
-test("openclaw-config: TTL expiration causes re-read; within TTL stays cached", async () => {
+test("openclaw-config: TTL expiration causes re-read; within TTL stays cached", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "claude-proxy-openclaw-ttl-"));
   const path = writeConfigAt(dir, { mcp: { servers: { a: { command: "echo" } } } });
-  // Set TTL = 50ms so this test is fast and the > 60s requirement is
-  // semantically met (cache invalidates when wall-clock elapsed > TTL).
+  // The cache compares Date.now() against its load timestamp, so this test
+  // owns the clock instead of racing it: node:test MockTimers with
+  // apis:["Date"] freezes Date only — setTimeout stays real, nothing else in
+  // this file is touched, and the test context restores Date when the test
+  // ends. The previous version budgeted 50 ms of wall clock for the
+  // "within TTL" window and 120 ms of sleep for the expiry, which blew up
+  // under full-suite load ("within TTL the old cached map is returned").
+  // A bigger budget would only move that failure to a slower machine;
+  // stepping the clock removes the timing dependency altogether and lets us
+  // pin the TTL boundary exactly (ttl-1 cached, ttl+1 re-read).
+  const T0 = 1_000_000;
+  const TTL_MS = 50;
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
   await withEnv({
     CLAUDE_PROXY_OPENCLAW_CONFIG: path,
     CLAUDE_PROXY_OPENCLAW_STRICT_PERMS: "off",
-    CLAUDE_PROXY_OPENCLAW_RESOLVER_TTL_MS: "50",
+    CLAUDE_PROXY_OPENCLAW_RESOLVER_TTL_MS: String(TTL_MS),
   }, async () => {
     _clearCacheForTesting();
     const first = await loadOpenclawMcpServers();
@@ -201,12 +212,13 @@ test("openclaw-config: TTL expiration causes re-read; within TTL stays cached", 
 
     // Swap the file. A second load inside the TTL must still see 'a'.
     writeFileSync(path, JSON.stringify({ mcp: { servers: { b: { command: "echo" } } } }));
+    t.mock.timers.setTime(T0 + TTL_MS - 1);
     const cachedHit = await loadOpenclawMcpServers();
     assert.ok(cachedHit.a, "within TTL the old cached map is returned");
     assert.ok(!cachedHit.b, "within TTL the new file is not yet seen");
 
-    // Wait > TTL, load again — must now reflect the new file.
-    await new Promise((r) => setTimeout(r, 120));
+    // Step past the TTL, load again — must now reflect the new file.
+    t.mock.timers.setTime(T0 + TTL_MS + 1);
     const fresh = await loadOpenclawMcpServers();
     assert.ok(fresh.b, "after TTL expiry the new file is read");
     assert.ok(!fresh.a, "old server gone after re-read");
