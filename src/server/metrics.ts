@@ -235,7 +235,36 @@ export function renderMetrics(): string {
   // looked identical from outside. The counters are always emitted, including
   // at zero, so a flat warm_hits series is a readable signal rather than an
   // absent one.
+  // Die Zähler allein reichen dafür nicht: eine Wand aus Nullen bedeutet
+  // entweder „der Vorrat ist abgeschaltet" oder „es kam nur noch kein
+  // Verkehr". Deshalb stehen die beiden Schalter mit in der Exposition, sodass
+  // sich das ohne Kenntnis der Umgebungsvariablen entscheiden lässt.
+  //
+  // Format: blanker 0/1-gauge je Schalter, ohne Label — dieselbe Redeweise wie
+  // `claude_proxy_sticky_pool_enabled` und `claude_proxy_trace_store_enabled`
+  // weiter unten. Bewusst NICHT als `state`-Label an `claude_proxy_init_pool_size`
+  // gehängt: dessen Samples sind Prozess-Anzahlen, ein Boolean in derselben
+  // Serie wäre weder summier- noch mittelbar (prometheus.io/docs/instrumenting/
+  // writing_exporters — „one metric should make sense when summed or averaged").
+  // Bewusst auch nicht als OpenMetrics-`stateset`/`info`: dieser Endpunkt weist
+  // im Content-Type das Textformat 0.0.4 aus, und dort sind nur counter, gauge,
+  // histogram, summary und untyped gültige TYPE-Werte. `info` trägt seinen Wert
+  // ohnehin immer als 1 und den Zustand nur im Label — das wäre genau die
+  // „fehlt oder ist false?"-Zweideutigkeit, die hier abgestellt wird. Ein
+  // `stateset` verlangt zudem einen Label-Namen gleich dem Metriknamen und
+  // genau einen wahren Zustand; diese zwei Schalter sind aber unabhängig und
+  // können beide gleichzeitig wahr sein.
   const ips = initPoolStats();
+  lines.push("# HELP claude_proxy_init_pool_enabled 1 when the init pool is active at all (CLAUDE_PROXY_INIT_POOL).");
+  lines.push("# TYPE claude_proxy_init_pool_enabled gauge");
+  lines.push(`claude_proxy_init_pool_enabled ${ips.enabled ? 1 : 0}`);
+
+  lines.push(
+    "# HELP claude_proxy_init_pool_isolated_enabled 1 when isolated (injectOAuthEnv) configurations are pre-warmed; 0 if CLAUDE_PROXY_BARE_POOL/_SIZE disabled them or the whole pool is off.",
+  );
+  lines.push("# TYPE claude_proxy_init_pool_isolated_enabled gauge");
+  lines.push(`claude_proxy_init_pool_isolated_enabled ${ips.isolatedEnabled ? 1 : 0}`);
+
   lines.push("# HELP claude_proxy_init_pool_size Pre-initialized workers parked in the init pool.");
   lines.push("# TYPE claude_proxy_init_pool_size gauge");
   lines.push(`claude_proxy_init_pool_size{state="live"} ${ips.size}`);

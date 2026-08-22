@@ -141,9 +141,36 @@ export const initPoolCounters = {
   evictions: 0,
 };
 
-/** Snapshot für /metrics und Diagnose. */
-export function initPoolStats(): { size: number; max: number; ttlMs: number } {
-  return { size: slots.size, max: MAX_SLOTS, ttlMs: SLOT_TTL_MS };
+/**
+ * Snapshot für /metrics und Diagnose.
+ *
+ * `enabled` und `isolatedEnabled` gehören mit hinaus, weil die Zähler allein
+ * ihren eigenen Ausfall nicht kennen: `warmHits 0` bei `size 0` heißt entweder
+ * „abgeschaltet" oder „noch kein Verkehr", und diese Zweideutigkeit hat den
+ * toten Vorrat 3,5 Tage überleben lassen.
+ *
+ * Beide Felder melden den **wirksamen** Zustand, nicht den rohen Schalter:
+ * `isolatedEnabled` ist nur dann true, wenn auch der Gesamtvorrat läuft — denn
+ * `poolable()` weist bei `!ENABLED` jede Konfiguration ab, die isolierte
+ * eingeschlossen. Ein rohes `ISOLATED_ENABLED` würde hier „das isolierte
+ * Vorwärmen arbeitet" behaupten, während nichts arbeitet; die zwei Fälle
+ * bleiben trotzdem unterscheidbar, weil `enabled` daneben steht
+ * (Gesamtabschaltung = 0/0, nur isoliert aus = 1/0).
+ */
+export function initPoolStats(): {
+  size: number;
+  max: number;
+  ttlMs: number;
+  enabled: boolean;
+  isolatedEnabled: boolean;
+} {
+  return {
+    size: slots.size,
+    max: MAX_SLOTS,
+    ttlMs: SLOT_TTL_MS,
+    enabled: ENABLED,
+    isolatedEnabled: ENABLED && ISOLATED_ENABLED,
+  };
 }
 
 /** Test hook: drop all slots and zero the counters. Never called in production. */
