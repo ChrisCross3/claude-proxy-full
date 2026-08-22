@@ -68,8 +68,12 @@ test("openaiToCli with isolated forceFlags sets all profile defaults in CliInput
   assert.equal(cli.disableSlashCommands, true);
   assert.equal(cli.isolateCwd, true);
   assert.equal(cli.injectOAuthEnv, true);
-  assert.ok(cli.systemPrompt, "systemPrompt should be set from response_format mapping");
-  assert.match(cli.systemPrompt!, /MUST respond with ONLY valid JSON/);
+  assert.deepEqual(
+    cli.jsonSchema,
+    { type: "object", properties: { ok: { type: "boolean" } } },
+    "jsonSchema should be set from response_format mapping (native --json-schema)",
+  );
+  assert.equal(cli.systemPrompt, undefined, "native path leaves system_prompt alone");
 });
 
 test("openaiToCli forceFlags override request body bare/disable_slash_commands", () => {
@@ -116,6 +120,6 @@ test("openaiToCli mapResponseFormat works without forceFlags", () => {
     },
     { mapResponseFormat: true },
   );
-  assert.ok(cli.systemPrompt);
+  assert.deepEqual(cli.jsonSchema, { type: "object" });
   assert.equal(cli.bare, undefined);
 });

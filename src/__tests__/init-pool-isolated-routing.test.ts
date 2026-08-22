@@ -4,9 +4,15 @@
  * Befund M2: der Vorrat an vorgewärmten `--bare`-Subprozessen war ein totes
  * Konstrukt. Die Bedingung in acquireStatelessStreamJson verlangte
  * `disallowedTools.length === 0 && !systemPrompt`, während die isolierte Route
- * jedem Aufruf acht forceDisallowedTools und (bei `response_format`) einen
- * abgeleiteten System-Prompt mitgibt. Beide Bedingungen konnten also nie
- * zugleich erfüllt sein — jeder Honcho-Aufruf hat kalt gespawnt.
+ * jedem Aufruf acht forceDisallowedTools und (bei `response_format`) ein
+ * abgeleitetes Schema-Spawn-Argument mitgibt. Beide Bedingungen konnten also
+ * nie zugleich erfüllt sein — jeder Honcho-Aufruf hat kalt gespawnt.
+ *
+ * Seit der Umstellung auf das native `--json-schema` ist das unterscheidende
+ * Spawn-Argument `jsonSchema` statt des abgeleiteten System-Prompts. Der
+ * Schlüssel hängt damit am Schema selbst, nicht mehr an seinem Namen: zwei
+ * Aufrufe mit gleichem Schema unter verschiedenen Namen teilen sich jetzt
+ * zu Recht einen warmen Slot.
  *
  * Diese Tests fahren den Pfad mit den echten Flags, die routes.ts baut
  * (openaiToCli + ISOLATED_PROFILE + gemergte forceDisallowedTools), und
@@ -83,7 +89,9 @@ function honchoCliInput(schemaName: string) {
         type: "json_schema",
         json_schema: {
           name: schemaName,
-          schema: { type: "object", properties: { ok: { type: "boolean" } } },
+          // Das Schema selbst muss sich mitunterscheiden: der native Pfad
+          // reicht nur `schema` an --json-schema weiter, der Name fällt weg.
+          schema: { type: "object", properties: { [schemaName]: { type: "boolean" } } },
         },
       },
     },
@@ -130,8 +138,10 @@ test("Honcho-Aufruf trägt Flags, gegen die die alte Pool-Bedingung nie greifen 
   // Punkt (1) des Befunds: forceDisallowedTools sind vor dem Pool-Routing
   // gemergt — die Bedingung `disallowedTools.length === 0` ist unerfüllbar.
   assert.equal(cli.disallowedTools?.length, 8, "acht forceDisallowedTools sind gemergt");
-  // Punkt (2): response_format setzt einen System-Prompt (Spawn-Argument).
-  assert.ok(cli.systemPrompt, "response_format erzeugt einen System-Prompt");
+  // Punkt (2): response_format setzt ein Schema-Spawn-Argument. Früher war das
+  // ein abgeleiteter System-Prompt, seit der nativen Umstellung `jsonSchema`.
+  assert.ok(cli.jsonSchema, "response_format erzeugt ein --json-schema-Argument");
+  assert.equal(cli.systemPrompt, undefined, "der native Pfad setzt keinen System-Prompt");
   // Und die isolierte Dreiheit steht, der bare-Pfad wird also überhaupt betreten.
   assert.equal(cli.bare, true);
   assert.equal(cli.isolateCwd, true);
@@ -185,14 +195,14 @@ test("warmer Slot trägt dieselben Flags wie der Aufruf, der ihn bekommt", async
   // nur die zwei Kaltstarts.
   assert.equal(spawns.length, 3, "ein Kaltstart plus je eine Nachfüllung pro Aufruf");
   // Jeder gespawnte Prozess — auch der nachgefüllte — muss die vollen
-  // isolierten Flags tragen. Ein Slot ohne --system-prompt oder ohne
+  // isolierten Flags tragen. Ein Slot ohne --json-schema oder ohne
   // --disallowedTools dürfte nie an einen Honcho-Aufruf gehen.
   for (const s of spawns) {
     assert.equal(s.bare, true);
     assert.equal(s.isolateCwd, true);
     assert.equal(s.injectOAuthEnv, true);
     assert.equal(s.disableSlashCommands, true);
-    assert.equal(s.systemPrompt, cli.systemPrompt, "Slot trägt den System-Prompt des Aufrufs");
+    assert.deepEqual(s.jsonSchema, cli.jsonSchema, "Slot trägt das Schema des Aufrufs");
     assert.deepEqual(
       [...(s.disallowedTools ?? [])].sort(),
       [...(cli.disallowedTools ?? [])].sort(),
@@ -204,7 +214,7 @@ test("warmer Slot trägt dieselben Flags wie der Aufruf, der ihn bekommt", async
 test("anderes Schema bekommt den Slot des ersten Schemas nicht", async () => {
   const a = honchoCliInput("DeriverFacts");
   const b = honchoCliInput("DeriverSummary");
-  assert.notEqual(a.systemPrompt, b.systemPrompt, "die beiden Schemata ergeben verschiedene Prompts");
+  assert.notDeepEqual(a.jsonSchema, b.jsonSchema, "die beiden Aufrufe tragen verschiedene Schemata");
 
   await acquireHoncho(a);
   await drainBackgroundRefill();

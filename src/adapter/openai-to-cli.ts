@@ -492,12 +492,105 @@ function reduceSchemaToFit(
 }
 
 /**
+ * Dialects the CLI's `--json-schema` validator can actually load.
+ *
+ * Measured on the pinned CLI 2.1.232: the validator is bound to draft-07. A
+ * schema that *declares* a newer dialect is not merely ignored, it aborts the
+ * spawn before any output is produced:
+ *
+ *   $ claude -p --output-format stream-json \
+ *       --json-schema '{"$schema":"https://json-schema.org/draft/2020-12/schema",...}' hi
+ *   Error: --json-schema is not a valid JSON Schema: no schema with key or ref
+ *          "https://json-schema.org/draft/2020-12/schema"
+ *   $ echo $?
+ *   1
+ *
+ * Same behaviour in `--output-format json`. Since the isolated route spawns
+ * through the warm bare-init-pool, that exit-1 surfaces to the caller as a
+ * failed acquire, not as a degraded answer. So a schema naming an unloadable
+ * dialect must NOT go down the native path — it keeps the prompt fallback.
+ *
+ * Absence of `$schema` is the common case and is fine: Pydantic v2's
+ * `model_json_schema()` deliberately omits the key, and Honcho passes that
+ * output through unchanged.
+ */
+const CLI_SUPPORTED_SCHEMA_DIALECT = /draft-07/;
+
+/**
+ * Extract the inner JSON Schema from an OpenAI `response_format` for the
+ * native `claude --json-schema` flag.
+ *
+ * Why this exists (and supersedes `responseFormatToSystemPrompt` for the
+ * common case): the CLI *does* have native enforcement. Verified end-to-end on
+ * 2.1.232 with the isolated profile's exact spawn shape (`--bare`, all eight
+ * workspace tools disallowed, `--output-format stream-json`):
+ *
+ *   - `--json-schema` installs a synthetic `StructuredOutput` tool. With the
+ *     profile's disallow-list applied, the init message reports
+ *     `"tools":["StructuredOutput"]` — the schema tool survives `--bare`, and
+ *     nothing else does.
+ *   - The model answers by CALLING that tool, so the payload is validated
+ *     against the schema instead of being coaxed out of free prose. On
+ *     mismatch the CLI re-prompts and, if it runs out of retries, ends with
+ *     subtype `error_max_structured_output_retries` rather than silently
+ *     returning something unparseable.
+ *   - The result message carries the validated JSON in BOTH `structured_output`
+ *     (parsed) and `result` (serialized). `cliResultToOpenai` already reads
+ *     `result.result`, so the JSON lands in the OpenAI `content` field with no
+ *     further plumbing.
+ *
+ * Note the assistant *text* stays prose in this mode (upstream issue #15511) —
+ * harmless here because the isolated route is non-streaming by construction
+ * and converts from the result message, never from accumulated deltas. A
+ * streaming caller could not use this path.
+ *
+ * Returns `undefined` — meaning "use the prompt fallback" — when:
+ *   - response_format is missing or not a json_schema-typed object
+ *   - the inner schema is missing or empty
+ *   - the schema declares a dialect the CLI validator cannot load
+ */
+export function responseFormatToJsonSchema(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const obj = raw as { type?: unknown; json_schema?: unknown };
+  if (obj.type !== "json_schema") return undefined;
+  if (!obj.json_schema || typeof obj.json_schema !== "object") return undefined;
+
+  const wrapper = obj.json_schema as { name?: unknown; schema?: unknown };
+  const schemaRaw = wrapper.schema;
+  if (!schemaRaw || typeof schemaRaw !== "object" || Array.isArray(schemaRaw)) return undefined;
+
+  const schema = schemaRaw as Record<string, unknown>;
+  if (Object.keys(schema).length === 0) return undefined;
+
+  const dialect = schema.$schema;
+  if (typeof dialect === "string" && !CLI_SUPPORTED_SCHEMA_DIALECT.test(dialect)) {
+    console.error(
+      `[openai-to-cli] responseFormatToJsonSchema: schema declares dialect "${dialect}", ` +
+        `which the CLI validator would reject (exit 1). Falling back to the forced-JSON prompt` +
+        (typeof wrapper.name === "string" ? ` (name=${wrapper.name})` : "") +
+        `.`,
+    );
+    return undefined;
+  }
+
+  return schema;
+}
+
+/**
  * Convert an OpenAI `response_format` (Structured Outputs) into an aggressive
- * Claude `--system-prompt` string. Used by the "isolated"-profile route to
- * bridge the OpenAI-to-Anthropic format gap: Anthropic CLI has no native
- * enforcement for `response_format: json_schema`, but a sufficiently strict
- * system prompt + Honcho's existing `json_repair` fence-stripping covers the
- * gap reliably for json-schema-typed `response_format`.
+ * Claude `--system-prompt` string.
+ *
+ * FALLBACK ONLY as of the native-schema switch. `responseFormatToJsonSchema`
+ * handles the common case via `--json-schema`; this prompt hack remains for
+ * schemas the CLI validator would refuse to load (see
+ * `CLI_SUPPORTED_SCHEMA_DIALECT`). Keeping it is deliberate: the alternative
+ * for those schemas is a hard spawn failure, and a weakly-enforced answer
+ * beats no answer. It relies on Honcho's `json_repair` fence-stripping.
+ *
+ * The 8192-byte cap and `reduceSchemaToFit` below serve only this fallback.
+ * Honcho's real traffic no longer reaches them — its schemas come from
+ * Pydantic v2, which omits `$schema` entirely, so they take the native path
+ * whole and unreduced regardless of size.
  *
  * Returns `undefined` when:
  *   - response_format is missing or not a json_schema-typed object
@@ -570,6 +663,11 @@ export interface OpenaiToCliOptions {
    * REPLACES any user-supplied system_prompt. Used by the "isolated" profile
    * for Honcho-style structured-extraction calls. Default false preserves
    * legacy behaviour on the default `/v1/chat/completions` route.
+   *
+   * As of the native-schema switch this is the SECOND choice: the mapping
+   * first tries `responseFormatToJsonSchema()` and emits `jsonSchema`
+   * (→ `claude --json-schema`), which leaves any caller system_prompt intact.
+   * The prompt hack only runs for schemas the CLI validator would reject.
    */
   mapResponseFormat?: boolean;
   /**
@@ -591,9 +689,11 @@ export interface OpenaiToCliOptions {
  * model and effort validation; throws on unknown model or unsupported effort.
  *
  * When `opts.mapResponseFormat` is set, an OpenAI `response_format: json_schema`
- * is converted into a forced-JSON system prompt (see
- * `responseFormatToSystemPrompt`) and overrides any user-supplied
- * `system_prompt`.
+ * is mapped to the CLI's native structured output — `jsonSchema` here,
+ * `claude --json-schema` at spawn time (see `responseFormatToJsonSchema`).
+ * Only a schema the CLI validator would refuse falls back to the forced-JSON
+ * system prompt (see `responseFormatToSystemPrompt`), which then overrides any
+ * user-supplied `system_prompt`.
  */
 export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions = {}): CliInput {
   const def = resolveModelStrict(request.model);
@@ -611,15 +711,26 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
   const permissionMode = extractPermissionMode(request.permission_mode);
   let systemPrompt = extractSystemPrompt(request.system_prompt);
   const appendSystemPrompt = extractAppendSystemPrompt(request.append_system_prompt);
-  if (opts.mapResponseFormat) {
-    const forced = responseFormatToSystemPrompt(request.response_format);
-    if (forced) systemPrompt = forced;
-  }
   const agent = extractAgent(request.agent);
   const agents = extractAgents(request.agents);
   let bare = extractBare(request.bare);
   let disableSlashCommands = extractDisableSlashCommands(request.disable_slash_commands);
-  const jsonSchema = extractJsonSchema(request.json_schema);
+  let jsonSchema = extractJsonSchema(request.json_schema);
+  // Map `response_format: json_schema` for profiles that ask for it. Native
+  // `--json-schema` first; only a schema the CLI validator would reject falls
+  // back to the forced-JSON system prompt (which then REPLACES any
+  // caller-supplied system_prompt, as it always did). An explicit
+  // `json_schema` body field wins over both — it is the more deliberate
+  // signal, and the two would otherwise be redundant.
+  if (opts.mapResponseFormat && !jsonSchema) {
+    const native = responseFormatToJsonSchema(request.response_format);
+    if (native) {
+      jsonSchema = native;
+    } else {
+      const forced = responseFormatToSystemPrompt(request.response_format);
+      if (forced) systemPrompt = forced;
+    }
+  }
   const maxTurns = extractMaxTurns(request.max_turns);
   let isolateCwd: boolean | undefined;
   let injectOAuthEnv: boolean | undefined;

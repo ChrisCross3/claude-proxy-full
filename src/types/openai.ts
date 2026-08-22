@@ -118,8 +118,10 @@ export interface OpenAIChatRequest {
   disable_slash_commands?: boolean;
   /**
    * JSON Schema the assistant's final answer must conform to. Mapped to
-   * claude --json-schema (print-mode only). Must be a plain JSON object;
-   * other shapes yield HTTP 400 invalid_request_error.
+   * claude --json-schema. Print mode in the CLI's sense (`-p`), which includes
+   * `--output-format stream-json` — verified on CLI 2.1.232. Must be a plain
+   * JSON object; other shapes yield HTTP 400 invalid_request_error. The schema
+   * must be loadable by the CLI's draft-07 validator, or the spawn exits 1.
    */
   json_schema?: Record<string, unknown>;
   /**
@@ -130,8 +132,11 @@ export interface OpenAIChatRequest {
   max_turns?: number;
   /**
    * OpenAI Structured Outputs format. Only `type: "json_schema"` is acted on
-   * by the proxy, and only in the "isolated" profile route — there it is
-   * converted to a forced-JSON system prompt before spawning the CLI. On the
+   * by the proxy, and only in the "isolated" profile route — there the inner
+   * schema is handed to the CLI's native `--json-schema` at spawn time, so the
+   * answer is produced through the validated `StructuredOutput` tool rather
+   * than coaxed out of prose. A schema declaring a JSON Schema dialect the CLI
+   * validator cannot load falls back to a forced-JSON system prompt. On the
    * default `/v1/chat/completions` route this field is parsed-but-ignored to
    * preserve legacy behaviour.
    */

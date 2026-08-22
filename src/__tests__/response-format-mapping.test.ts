@@ -111,24 +111,25 @@ test("responseFormatToSystemPrompt: handles deeply nested schema without crash",
   assert.ok(out);
 });
 
-test("openaiToCli with mapResponseFormat=true converts response_format to systemPrompt", () => {
+// Since the native-schema switch, mapResponseFormat routes a loadable schema
+// to `--json-schema` instead of the prompt hack. The prompt path is still
+// exercised above (unit level) and in response-format-native-schema.test.ts
+// (fallback for dialects the CLI validator rejects).
+test("openaiToCli with mapResponseFormat=true converts response_format to jsonSchema", () => {
+  const schema = { type: "object", properties: { ok: { type: "boolean" } } };
   const cli = openaiToCli(
     {
       model: "claude-haiku-4-5",
       messages: [{ role: "user", content: "test" }],
       response_format: {
         type: "json_schema",
-        json_schema: {
-          name: "Result",
-          schema: { type: "object", properties: { ok: { type: "boolean" } } },
-        },
+        json_schema: { name: "Result", schema },
       },
     },
     { mapResponseFormat: true },
   );
-  assert.ok(cli.systemPrompt, "systemPrompt should be set");
-  assert.match(cli.systemPrompt!, /MUST respond with ONLY valid JSON/);
-  assert.match(cli.systemPrompt!, /Schema name: Result/);
+  assert.deepEqual(cli.jsonSchema, schema, "schema should reach the CLI natively");
+  assert.equal(cli.systemPrompt, undefined, "no forced-JSON prompt on the native path");
 });
 
 test("openaiToCli WITHOUT mapResponseFormat ignores response_format (legacy behavior)", () => {
@@ -143,7 +144,10 @@ test("openaiToCli WITHOUT mapResponseFormat ignores response_format (legacy beha
   assert.equal(cli.systemPrompt, undefined);
 });
 
-test("openaiToCli with mapResponseFormat=true overrides user-supplied system_prompt", () => {
+// The override only applies on the fallback path now: the native path has no
+// reason to touch system_prompt. `$schema: 2020-12` is the measured trigger —
+// the CLI validator cannot load that dialect and exits 1 on it.
+test("openaiToCli with mapResponseFormat=true overrides user-supplied system_prompt on the fallback path", () => {
   const cli = openaiToCli(
     {
       model: "claude-haiku-4-5",
@@ -151,11 +155,18 @@ test("openaiToCli with mapResponseFormat=true overrides user-supplied system_pro
       system_prompt: "USER OWN SYSTEM PROMPT",
       response_format: {
         type: "json_schema",
-        json_schema: { schema: { type: "object", properties: { a: { type: "string" } } } },
+        json_schema: {
+          schema: {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { a: { type: "string" } },
+          },
+        },
       },
     },
     { mapResponseFormat: true },
   );
+  assert.equal(cli.jsonSchema, undefined);
   assert.ok(cli.systemPrompt);
   assert.doesNotMatch(cli.systemPrompt!, /USER OWN SYSTEM PROMPT/);
   assert.match(cli.systemPrompt!, /MUST respond with ONLY valid JSON/);
