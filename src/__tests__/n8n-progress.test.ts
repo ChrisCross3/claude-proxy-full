@@ -76,7 +76,18 @@ test("n8n progress: positive snapshot is cached for ~3s", async (t) => {
 
 test("n8n progress: null result expires after ~1s (NEG_CACHE_TTL_MS)", async (t) => {
   __resetN8nProgressCacheForTests();
-  t.mock.timers.enable({ apis: ["Date"] });
+  // getRunningExecution compares Date.now() against the cache timestamp, so
+  // this test owns the clock rather than sampling it. Same seam and same
+  // recipe as openclaw-config.test.ts: apis:["Date"] freezes Date only, the
+  // real setTimeout inside the fetch path stays untouched, and the test
+  // context restores Date when the test ends (so the sibling test above may
+  // enable it again — t.mock, unlike the module-level mock, is not shared,
+  // and a second enable() on the same instance would throw ERR_INVALID_STATE).
+  // Stepping to an absolute time instead of ticking a delta pins the boundary
+  // exactly: ttl-1 still cached, ttl+1 refetched.
+  const T0 = 1_000_000;
+  const NEG_TTL_MS = 1000;
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
   // Empty data array → snapshot is null and gets negative-cached.
   const log = installFetch({ data: [] });
   t.after(() => { restoreFetch(); __resetN8nProgressCacheForTests(); });
@@ -85,16 +96,17 @@ test("n8n progress: null result expires after ~1s (NEG_CACHE_TTL_MS)", async (t)
   assert.equal(first, null);
   assert.equal(log.count, 1);
 
-  // Inside NEG_CACHE_TTL_MS — still cached, no new fetch.
-  t.mock.timers.tick(500);
+  // One millisecond short of NEG_CACHE_TTL_MS — still cached, no new fetch.
+  t.mock.timers.setTime(T0 + NEG_TTL_MS - 1);
   const mid = await getRunningExecution();
   assert.equal(mid, null);
-  assert.equal(log.count, 1, "negative cache holds <1s");
+  assert.equal(log.count, 1, "negative cache still holds at ttl-1");
 
-  // Past NEG_CACHE_TTL_MS — must refetch even though positive TTL (3s)
-  // has not elapsed. This is the core invariant of the negative TTL.
-  t.mock.timers.tick(700);
+  // One millisecond past NEG_CACHE_TTL_MS — must refetch even though the
+  // positive TTL (3s) is nowhere near elapsed. That gap is the whole point of
+  // the negative TTL, and it is what this assertion pins down.
+  t.mock.timers.setTime(T0 + NEG_TTL_MS + 1);
   const after = await getRunningExecution();
   assert.equal(after, null);
-  assert.equal(log.count, 2, "negative cache must expire after 1s");
+  assert.equal(log.count, 2, "negative cache must be gone at ttl+1");
 });
