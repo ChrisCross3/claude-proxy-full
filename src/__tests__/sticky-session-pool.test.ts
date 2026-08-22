@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { mock, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildStickyInternalKey,
@@ -7,7 +7,11 @@ import {
   isAbsoluteExpired,
   parseStickyTtlMs,
   __hashAgentsForTests,
+  acquireStickySession,
+  resetStickyPoolForTests,
 } from "../subprocess/sticky-session-pool.js";
+import { StreamJsonSubprocess, type StreamJsonOptions } from "../subprocess/stream-json-manager.js";
+import { initPoolCounters, initPoolStats, __resetInitPoolForTests } from "../subprocess/init-pool.js";
 
 test("disallowedToolsKey sorts tools for stable fingerprinting", () => {
   assert.equal(disallowedToolsKey(["mcp__b", "mcp__a"]), "mcp__a,mcp__b");
@@ -83,5 +87,103 @@ test("hashAgents is insertion-order-independent (stableStringify alignment)", ()
   assert.notEqual(
     __hashAgentsForTests("ad-hoc", agentsA),
     __hashAgentsForTests("ad-hoc", agentsC),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Folgebefund zu M2 (2026-08-22): warum createProcess() NICHT nach der
+// Spawn-Konfiguration schlüsselt.
+//
+// `createProcess` trägt dieselbe schmale Bedingung, die in routes.ts der Kern
+// von M2 war. Hier ist sie kein toter Code, aber nahezu wirkungslos: sobald ein
+// Aufruf `tools` mitschickt — bei openclaw der Normalfall — füllt
+// externalNativeToolDisallowList() die disallowedTools, und der Sticky-Kaltstart
+// geht am Vorrat vorbei.
+//
+// Der Vorrat könnte ihn seit M2 technisch bedienen. Er tut es bewusst nicht,
+// aus demselben Grund, den M2 in session-pool.ts `cold()` ausgeschrieben hat:
+// die Flags stammen aus dem Client-Body. Gemessen am gebauten Stand ist das
+// Budget des Init-Pools bereits voll — drei Prewarm-Modelle plus Honchos sechs
+// Schemata ergeben neun Konfigurationen bei MAX_SLOTS=6; die drei Prewarm-Slots
+// sind danach restlos verdrängt. Ein dritter, client-gesteuerter Mieter würde
+// je Konfiguration einen Honcho-Slot verdrängen und M2 damit still zurücknehmen.
+//
+// Die Tests pinnen deshalb die Entscheidung fest: der flaggenlose Sticky-Kaltstart
+// nutzt den Vorrat, der flaggenbehaftete nicht. Wer das ändert, ändert eine
+// Kapazitätspolitik und muss sie in init-pool.ts mitbringen (getrenntes Budget
+// oder Aufnahmeregel), nicht hier.
+// ---------------------------------------------------------------------------
+
+const spawns: StreamJsonOptions[] = [];
+
+before(() => {
+  mock.method(StreamJsonSubprocess.prototype, "start", async function (this: any, opts: StreamJsonOptions) {
+    spawns.push(opts);
+    this.model = opts.model;
+    this.spawnedAt = Date.now();
+  });
+  mock.method(StreamJsonSubprocess.prototype, "isHealthy", () => true);
+  mock.method(StreamJsonSubprocess.prototype, "getAge", () => 0);
+  mock.method(StreamJsonSubprocess.prototype, "kill", () => {});
+});
+
+after(() => mock.restoreAll());
+
+beforeEach(() => {
+  spawns.length = 0;
+  resetStickyPoolForTests();
+  __resetInitPoolForTests();
+});
+
+/** Lässt die im Hintergrund angestoßene Nachfüllung des Vorrats durchlaufen. */
+async function drainBackgroundRefill(): Promise<void> {
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+}
+
+async function acquireSticky(sessionKeyHash: string, disallowedTools?: string[]) {
+  const res = await acquireStickySession({
+    sessionKeyHash,
+    sessionKeyHashShort: sessionKeyHash.slice(0, 8),
+    ttlSeconds: 3600,
+    reset: false,
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user", content: "Hallo" }],
+    bodyForPrompt: {},
+    ...(disallowedTools ? { disallowedTools } : {}),
+  });
+  res.release({ status: "success", assistantText: "ok" });
+  return res;
+}
+
+test("flaggenloser Sticky-Kaltstart nutzt den Init-Vorrat", async () => {
+  await acquireSticky("session-plain");
+  assert.equal(
+    initPoolCounters.coldSpawns + initPoolCounters.warmHits,
+    1,
+    "der flaggenlose Pfad muss durch den Init-Pool gehen — sonst ist auch er versehentlich gekappt",
+  );
+});
+
+test("Sticky-Kaltstart MIT Flags geht bewusst am Init-Vorrat vorbei", async () => {
+  // Genau das, was externalNativeToolDisallowList() aus einem `tools`-Body macht.
+  await acquireSticky("session-flagged", ["mcp__n8n__list", "n8n__list"]);
+
+  assert.equal(
+    initPoolCounters.coldSpawns + initPoolCounters.warmHits,
+    0,
+    "bewusst: client-gesteuerte Spawn-Konfigurationen dürfen das Honcho-Budget nicht verdrängen",
+  );
+  assert.equal(spawns.length, 1, "stattdessen genau ein dedizierter Prozess");
+  assert.deepEqual(
+    [...(spawns[0].disallowedTools ?? [])].sort(),
+    ["mcp__n8n__list", "n8n__list"],
+    "der dedizierte Prozess trägt die Flags des Aufrufs",
+  );
+
+  await drainBackgroundRefill();
+  assert.equal(
+    initPoolStats().size,
+    0,
+    "und er parkt keinen 240-MB-Slot für eine Konfiguration, die der Client bestimmt",
   );
 });

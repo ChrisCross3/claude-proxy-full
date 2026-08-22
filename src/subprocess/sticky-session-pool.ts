@@ -332,6 +332,32 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
   return messagesToPrompt([lastMessage], body);
 }
 
+/**
+ * Prozess für einen Sticky-Kaltstart beschaffen.
+ *
+ * Der Vorrat (init-pool) wird nur für die flaggenlose Spawn-Konfiguration
+ * benutzt. Seit dem M2-Fix schlüsselt er nach der vollständigen
+ * Spawn-Konfiguration und könnte die flaggenbehafteten Aufrufe technisch
+ * genauso bedienen — bewusst nicht, aus demselben Grund, den M2 in
+ * session-pool.ts `cold()` ausgeschrieben hat: die Flags stammen hier aus dem
+ * Client-Body (`openaiToCli(body)`), der Schlüsselraum wäre also offen.
+ *
+ * Dazu kommt, dass das Budget schon ohne diesen Mieter nicht reicht: drei
+ * vorgewärmte Modelle plus Honchos sechs Schemata sind neun Konfigurationen
+ * bei MAX_SLOTS=6 — die Prewarm-Slots werden bereits heute restlos verdrängt.
+ * Jede zusätzliche, client-bestimmte Konfiguration parkt einen ~240-MB-Prozess
+ * und wirft dafür einen Honcho-Slot heraus; der Vorrat würde thrashen und M2
+ * still zurückgenommen.
+ *
+ * Nicht der Grund: Sicherheit. Ein Vorrats-Slot trägt keinen Turn-Zustand, das
+ * Ausleihen entfernt ihn aus der Map (zwei Sessions teilen sich nie einen
+ * Prozess), und der Schlüssel deckt jedes Feld ab, das ein CLI-Spawn-Argument
+ * wird — Tool-Rechte können also nicht zwischen Sessions auslaufen.
+ *
+ * Wer das ändern will, ändert eine Kapazitätspolitik: getrenntes Budget je
+ * Mieter oder eine Aufnahmeregel (Konfiguration erst ab der zweiten Sichtung
+ * einlagern). Beides gehört nach init-pool.ts, nicht hierher.
+ */
 async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number): Promise<StreamJsonSubprocess> {
   if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined) return acquirePreInit(model);
   const subprocess = new StreamJsonSubprocess();
