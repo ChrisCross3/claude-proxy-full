@@ -387,8 +387,26 @@ export function messagesToPrompt(
  * Anthropic models tolerate large prompts but attention flattens past a few
  * thousand tokens; the JSON-Schema part is rarely needed beyond top-level
  * field names + types for the deriver-style structured extraction Honcho does.
+ *
+ * The unit is UTF-8 BYTES, measured with {@link utf8Bytes} - never
+ * `String.length`, which counts UTF-16 code units and therefore undercounts
+ * every non-ASCII character (German umlauts 2x, CJK 3x, most emoji 2x per
+ * surrogate pair). Bytes is what every consumer downstream counts: the only
+ * hard size limit Anthropic documents is on the whole request and is worded
+ * "Request exceeds the maximum allowed number of bytes" (413
+ * `request_too_large`, 32 MB on the Messages API), the tokenizer works on
+ * UTF-8 bytes, and the native `--json-schema` route hands the schema to the CLI
+ * through argv, where ARG_MAX is a byte budget as well. Nothing in that chain
+ * counts UTF-16 code units - a German or CJK schema measured in code units
+ * looked comfortably inside the cap while being half again as large on the
+ * wire, and the operator log said "bytes" while printing characters.
  */
 const FORCED_JSON_SCHEMA_MAX_BYTES = 8192;
+
+/** Size of `s` in UTF-8 bytes - the unit the cap above is expressed in. */
+function utf8Bytes(s: string): number {
+  return Buffer.byteLength(s, "utf8");
+}
 
 /**
  * Marker key injected into a hard-reduced schema so the model - and anyone
@@ -438,7 +456,7 @@ function reduceSchemaToFit(
   serialized: string,
   maxBytes: number,
 ): { text: string; reduced: boolean } {
-  if (serialized.length <= maxBytes) return { text: serialized, reduced: false };
+  if (utf8Bytes(serialized) <= maxBytes) return { text: serialized, reduced: false };
 
   const propsRaw = schema.properties;
   const props =
@@ -457,13 +475,14 @@ function reduceSchemaToFit(
     skeleton.properties = collapsed;
   }
   const level1 = JSON.stringify(skeleton);
-  if (level1.length <= maxBytes) return { text: level1, reduced: true };
+  if (utf8Bytes(level1) <= maxBytes) return { text: level1, reduced: true };
 
   // Step 2: greedily keep whole properties until the budget (minus room for
   // the marker) is used up. `required` is dropped here - it would reference
   // fields that are no longer listed.
   const total = props ? Object.keys(props).length : 0;
-  const reserve = JSON.stringify({ [SCHEMA_REDUCED_KEY]: reducedNote(total, total) }).length + 1;
+  const reserve =
+    utf8Bytes(JSON.stringify({ [SCHEMA_REDUCED_KEY]: reducedNote(total, total) })) + 1;
   const kept: Record<string, unknown> = {};
   const partial: Record<string, unknown> = {};
   if (schema.type !== undefined) partial.type = schema.type;
@@ -472,7 +491,7 @@ function reduceSchemaToFit(
   if (props) {
     for (const [name, node] of Object.entries(props)) {
       kept[name] = typeSkeleton(node);
-      if (JSON.stringify(partial).length + reserve > maxBytes) {
+      if (utf8Bytes(JSON.stringify(partial)) + reserve > maxBytes) {
         delete kept[name];
         break;
       }
@@ -481,7 +500,7 @@ function reduceSchemaToFit(
   }
   partial[SCHEMA_REDUCED_KEY] = reducedNote(keptCount, total);
   const level2 = JSON.stringify(partial);
-  if (level2.length <= maxBytes) return { text: level2, reduced: true };
+  if (utf8Bytes(level2) <= maxBytes) return { text: level2, reduced: true };
 
   // Pathological input (e.g. a gigantic `type` value): emit the smallest
   // complete document we can still stand behind.
@@ -625,7 +644,7 @@ export function responseFormatToSystemPrompt(raw: unknown): string | undefined {
   );
   if (reduced) {
     console.error(
-      `[openai-to-cli] responseFormatToSystemPrompt: schema reduced from ${serialized.length} to ${schemaText.length} bytes` +
+      `[openai-to-cli] responseFormatToSystemPrompt: schema reduced from ${utf8Bytes(serialized)} to ${utf8Bytes(schemaText)} bytes` +
         (typeof wrapper.name === "string" ? ` (name=${wrapper.name})` : ""),
     );
   }
