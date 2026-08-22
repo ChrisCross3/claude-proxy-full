@@ -13,7 +13,7 @@
     "dev": "tsc --watch",
     "start": "node dist/server/standalone.js",
     "update-pricing": "node scripts/update-pricing.mjs",
-    "test": "node --test dist/**/*.test.js",
+    "test": "cd dist && node --test",
     "soak": "node scripts/soak.mjs",
     "soak:quick": "SOAK_CONCURRENCY=1 node scripts/soak.mjs",
     "clean": "rm -rf dist",
