@@ -571,12 +571,27 @@ export function resolveCwd(options: { cwd?: string; isolateCwd?: boolean }): str
  *
  * Shared between manager.ts and stream-json-manager.ts.
  */
+/**
+ * Die Vorgabe-Tokenquelle, absichtlich als beschreibbares Objekt und nicht als
+ * Direktaufruf im Rumpf.
+ *
+ * Grund: `resolveEnv` haengt sonst am Credentials-File des HOSTS, und ein Test
+ * dieser fuenf Zeilen kann sich dann nur noch selbst ueberspringen. Genau das
+ * tat `resolve-env.test.ts` bis zum 2026-09-05 -- auf einer Maschine mit
+ * abgelaufenem Token meldete der Lauf `ok ... # SKIP`, `fail 0`, Exit 0. Ein
+ * gruener Lauf, in dem nichts geprueft wurde (nachgestellt mit sabotiertem
+ * HOME). Ueber diesen Sitz laesst sich die Quelle im Test ersetzen, waehrend
+ * die Verdrahtung selbst pruefbar bleibt (Identitaets-Assertion).
+ */
+export const resolveEnvDefaults = { resolveToken: resolveAnthropicApiKey };
+
 export async function resolveEnv(
   options: { injectOAuthEnv?: boolean },
+  deps: { resolveToken?: () => Promise<string> } = {},
 ): Promise<NodeJS.ProcessEnv> {
   const base: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_PROXY: "1" };
   if (options.injectOAuthEnv) {
-    const token = await resolveAnthropicApiKey();
+    const token = await (deps.resolveToken ?? resolveEnvDefaults.resolveToken)();
     base.ANTHROPIC_AUTH_TOKEN = token;
     delete base.ANTHROPIC_API_KEY;
   }
