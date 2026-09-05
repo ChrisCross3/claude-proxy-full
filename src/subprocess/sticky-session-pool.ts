@@ -4,6 +4,7 @@ import { StreamJsonSubprocess } from "./stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
 import { acquirePreInit } from "./init-pool.js";
+import { resolveCwd } from "./manager.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { messagesToPrompt } from "../adapter/openai-to-cli.js";
 import type { OpenAIChatMessage, OpenAIChatRequest } from "../types/openai.js";
@@ -218,7 +219,9 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
     agentsKey: hashAgents(options.agent, options.agents),
     modesKey: hashModes(options.bare, options.disableSlashCommands),
     mcpPolicyKey: options.mcpPolicyKey || defaultMcpPolicyKey(),
-    cwd: options.cwd || process.cwd(),
+    // Dieselbe Aufloesung wie in `start()` — eine zweite Kopie der Regel
+    // koennte auseinanderlaufen, und genau das war der Fehler hier.
+    cwd: resolveCwd({ cwd: options.cwd }),
     dynamicPromptExclusion: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1" || options.dynamicPromptExclusion === true,
     sessionPolicy: options.sessionPolicy || "strict",
   };
@@ -263,7 +266,7 @@ export async function acquireStickySession(options: StickyAcquireOptions): Promi
       const limit = consumeColdSpawnToken(options.callerKey);
       if (!limit.ok) throw new ColdSpawnRateLimitedError(limit.retryAfterSec);
     }
-    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents, options.bare, options.disableSlashCommands, options.jsonSchema, options.maxTurns);
+    const subprocess = await createProcess(options.model, options.disallowedTools, options.effort, options.thinking, options.debug, options.maxBudgetUsd, options.permissionMode, options.systemPrompt, options.appendSystemPrompt, options.agent, options.agents, options.bare, options.disableSlashCommands, options.jsonSchema, options.maxTurns, options.cwd);
     const now = Date.now();
     const slot: StickySlot = {
       subprocess,
@@ -358,10 +361,10 @@ function buildWarmUserText(messages: OpenAIChatMessage[], body: Pick<OpenAIChatR
  * Mieter oder eine Aufnahmeregel (Konfiguration erst ab der zweiten Sichtung
  * einlagern). Beides gehört nach init-pool.ts, nicht hierher.
  */
-async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number): Promise<StreamJsonSubprocess> {
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined) return acquirePreInit(model);
+async function createProcess(model: ClaudeModel, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, cwd?: string): Promise<StreamJsonSubprocess> {
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined) return acquirePreInit(model, { cwd });
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, cwd });
   return subprocess;
 }
 

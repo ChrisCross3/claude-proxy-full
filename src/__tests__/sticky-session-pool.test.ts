@@ -187,3 +187,95 @@ test("Sticky-Kaltstart MIT Flags geht bewusst am Init-Vorrat vorbei", async () =
     "und er parkt keinen 240-MB-Slot für eine Konfiguration, die der Client bestimmt",
   );
 });
+
+// ---------------------------------------------------------------------------
+// cwd — der spiegelbildliche Fehler zu 7e297fc (init-pool).
+//
+// Dort fehlte `cwd` im Pool-SCHLUESSEL. Hier ist es umgekehrt: der
+// Fingerabdruck fuehrt `cwd` seit jeher, aber `createProcess()` reichte es
+// nicht an `start()` weiter. Ein Slot behauptete also ein Verzeichnis, in dem
+// sein Prozess gar nicht lief.
+//
+// Warum das mehr ist als Kosmetik: die claude-CLI wertet ihr Verzeichnis beim
+// START aus, nicht pro Anfrage -- CLAUDE.md-Walk-up, Projekt-Settings samt
+// Hooks, Auto-Memory. Ein Prozess bringt sein Verzeichnis mit. Ein Slot, dessen
+// echtes Verzeichnis seinem Fingerabdruck widerspricht, traegt fremden
+// Projektkontext in eine Anfrage, die etwas anderes bestellt hat.
+//
+// Heute setzt kein Aufrufer `cwd` (routes.ts:833 und :1429 lassen es weg), der
+// Fehler ist also latent. Genau deshalb steht er hier fest: latent heisst
+// "wartet auf den ersten Aufrufer", nicht "harmlos".
+//
+// ZUR MESSMETHODE: diese Tests zaehlen KEINE Spawns. Der Init-Vorrat fuellt
+// sich im Hintergrund nach, und diese Nachfuellung laeuft in die `await`s des
+// laufenden Tests hinein -- eine Zaehlung von `spawns.length` misst dann die
+// Nachfuellung mit und ist um eins daneben (nachgemessen am 2026-09-05, auch
+// im isolierten Lauf). Belegt wird stattdessen direkt, was die Behauptung ist:
+// welches `cwd` im Prozess ankommt, und ob ein zweiter Aufruf denselben Slot
+// trifft (`isStickyHit`).
+// ---------------------------------------------------------------------------
+
+async function acquireStickyWith(sessionKeyHash: string, extra: Record<string, unknown>) {
+  const res = await acquireStickySession({
+    sessionKeyHash,
+    sessionKeyHashShort: sessionKeyHash.slice(0, 8),
+    ttlSeconds: 3600,
+    reset: false,
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user", content: "Hallo" }],
+    bodyForPrompt: {},
+    ...extra,
+  } as Parameters<typeof acquireStickySession>[0]);
+  res.release({ status: "success", assistantText: "ok" });
+  return res;
+}
+
+test("Sticky-Spawn MIT Flags traegt das angeforderte cwd in den Prozess", async () => {
+  const wanted = "/tmp/hermes-sticky-cwd-a";
+  await acquireStickyWith("session-cwd-dedicated", {
+    disallowedTools: ["mcp__n8n__list"],
+    cwd: wanted,
+  });
+
+  // Der flaggenbehaftete Pfad geht bewusst am Vorrat vorbei — hier gibt es
+  // keine Nachfuellung, der Spawn ist eindeutig.
+  assert.equal(spawns.length, 1, "genau ein dedizierter Prozess");
+  assert.equal(
+    spawns[0].cwd,
+    wanted,
+    "der Prozess muss in dem Verzeichnis starten, das sein Fingerabdruck behauptet",
+  );
+});
+
+test("Sticky-Spawn OHNE Flags traegt das cwd durch den Init-Vorrat", async () => {
+  const wanted = "/tmp/hermes-sticky-cwd-b";
+  await acquireStickyWith("session-cwd-pooled", { cwd: wanted });
+  await drainBackgroundRefill();
+
+  assert.ok(
+    spawns.length > 0,
+    "der flaggenlose Pfad muss ueberhaupt spawnen",
+  );
+  assert.ok(
+    spawns.every((s) => s.cwd === wanted),
+    `auch der Vorrats-Pfad darf das Verzeichnis nicht unterschlagen — der Init-Pool schluesselt seit 7e297fc darauf. Gesehen: ${JSON.stringify(spawns.map((s) => s.cwd))}`,
+  );
+});
+
+test("zwei cwd-Werte teilen sich keinen Slot, gleiches cwd schon", async () => {
+  await acquireStickyWith("session-cwd-split", { cwd: "/tmp/hermes-cwd-1" });
+  const other = await acquireStickyWith("session-cwd-split", { cwd: "/tmp/hermes-cwd-2" });
+  assert.equal(other.isStickyHit, false, "verschiedene Verzeichnisse = verschiedene Slots");
+
+  await acquireStickyWith("session-cwd-same", { cwd: "/tmp/hermes-cwd-3" });
+  const again = await acquireStickyWith("session-cwd-same", { cwd: "/tmp/hermes-cwd-3" });
+  assert.equal(again.isStickyHit, true, "gleiches Verzeichnis = derselbe Slot");
+});
+
+test("cwd undefined und das ausgeschriebene eigene Verzeichnis fallen auf einen Slot", async () => {
+  // Dieselbe Aufloesung wie in `start()` (`resolveCwd`) — sonst haelt der Pool
+  // zwei Slots fuer dasselbe Verzeichnis.
+  await acquireStickyWith("session-cwd-collapse", {});
+  const second = await acquireStickyWith("session-cwd-collapse", { cwd: process.cwd() });
+  assert.equal(second.isStickyHit, true, "beide Schreibweisen meinen dasselbe Verzeichnis");
+});
