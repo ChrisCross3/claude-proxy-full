@@ -1,5 +1,25 @@
 name: Release package
 
+# Diese Datei ist der Weg, auf dem das veroeffentlichte Paket entsteht: sie hat
+# `contents: write` und sieht `NPM_TOKEN`. Deshalb gelten hier zwei Regeln, die
+# fuer ci.yml bewusst NICHT gelten (dort gibt es nichts zu stehlen):
+#
+#   1. Actions sind auf den vollen Commit-SHA gepinnt, nicht auf ein Tag. Ein
+#      Tag ist beweglich -- im tj-actions/changed-files-Vorfall vom Maerz 2025
+#      wurde genau das ausgenutzt: bösartiger Code hinter ein bestehendes Tag
+#      geschoben, ueber 23.000 Repos liefen ihn und gaben ihre CI-Secrets preis.
+#      Ein SHA ist unveraenderlich. GitHubs eigener Haertungsleitfaden nennt das
+#      "the only way to use an action as an immutable release".
+#      Der Klartext-Kommentar hinter dem SHA ist die einzige Stelle, an der die
+#      Version noch lesbar ist -- er gehoert beim Anheben mitgezogen.
+#
+#   2. Node ist auf eine unterstuetzte LTS gepinnt. Node 20 stand hier bis
+#      2026-09-05 und war seit 2026-04-30 EOL (nodejs/Release schedule.json) --
+#      die Release-Pipeline baute das veroeffentlichte Paket auf einer Runtime
+#      ohne Sicherheitspatches. Jetzt 22 (EOL 2027-04-30), und zwar dieselbe
+#      Version, auf der ci.yml die Suite gruen sieht: was hier gebaut wird, ist
+#      damit auf genau der Runtime geprueft, auf der es gebaut wird.
+
 on:
   push:
     tags:
@@ -15,12 +35,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
 
