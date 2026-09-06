@@ -75,6 +75,21 @@ export interface Profile {
    */
   tools?: string[];
   /**
+   * Welche Werkzeug-Bruecke gilt.
+   *
+   *   "mcp"  — Hermes' Werkzeuge werden als ECHTE MCP-Werkzeuge angemeldet.
+   *            Das Modell liefert strukturierte `tool_use`-Bloecke; nichts
+   *            wird geparst. Gemessen 10/10 gegen 6/10 der Textbruecke.
+   *   "text" — der alte Weg: Schemata als ~35 KB JSON in den Prompt und
+   *            Hoffnung auf `{"tool_call":…}`. Bleibt als Rueckfall, bis der
+   *            neue Weg im Betrieb belegt ist.
+   *
+   * ZWEI MECHANISMEN NEBENEINANDER SIND SCHULD, keine Absicherung: sobald
+   * "mcp" gemessen ist, gehoert "text" entfernt. Bis dahin ist der Schalter
+   * die Moeglichkeit, ohne Deployment zurueckzufallen.
+   */
+  toolBridge: "mcp" | "text";
+  /**
    * Erzwungener Sitzungsmodus. "stateless" heisst: eigener Unterprozess je
    * Anfrage, danach getoetet. Kein Wiederverwenden, kein Pool ueber Anfragen
    * hinweg, keine Moeglichkeit, dass zwei Aufrufer denselben Verlauf sehen.
@@ -124,6 +139,7 @@ export const ISOLATED_PROFILE: Profile = {
   restricted: true,
   strictMcpConfig: true,
   tools: [],
+  toolBridge: "mcp",
   sessionMode: "stateless",
   pool: "bare",
   // Security: --bare leaves Bash/Edit/Read enabled. Untrusted-input callers
@@ -177,6 +193,7 @@ export const LEAD_PROFILE: Profile = {
   restricted: true,
   strictMcpConfig: true,
   tools: [],
+  toolBridge: "mcp",
   sessionMode: "stateless",
   pool: "bare",
   // Redundant zu `tools: []`, und das mit Absicht. Zwei Gruende: die

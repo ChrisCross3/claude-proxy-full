@@ -120,6 +120,16 @@ export function cliResultToOpenai(
   requestId: string,
   toolRequest?: Pick<OpenAIChatRequest, "tools" | "tool_choice">,
   intendedModel?: string,
+  /**
+   * Werkzeugaufrufe, die ueber MCP hereinkamen — also STRUKTURIERT, aus den
+   * `tool_use`-Bloecken der Assistenten-Nachricht (siehe mcp-bridge.ts).
+   *
+   * Sind welche da, haben sie Vorrang vor dem Textparser: sie sind das, was
+   * das Modell wirklich gerufen hat, waehrend der Parser nur raet, was in der
+   * Antwort nach einem Aufruf AUSSIEHT. Die Textbruecke bleibt als Rueckfall
+   * fuer Aufrufer ohne MCP-Werkzeuge.
+   */
+  mcpToolCalls?: OpenAIToolCall[],
 ): OpenAIChatResponse {
   // Prefer the model the caller intended (i.e. the one resolved through the
   // registry at request time). Claude CLI's stream-json output sometimes reports
@@ -136,7 +146,12 @@ export function cliResultToOpenai(
   let toolCalls: OpenAIToolCall[] | undefined;
   let finishReason: "stop" | "tool_calls" = "stop";
 
-  if (toolRequest && shouldBridgeExternalTools(toolRequest)) {
+  if (mcpToolCalls && mcpToolCalls.length > 0) {
+    toolCalls = mcpToolCalls;
+    // OpenAI tool-call assistant messages should not carry prose content.
+    content = null;
+    finishReason = "tool_calls";
+  } else if (toolRequest && shouldBridgeExternalTools(toolRequest)) {
     const parsed = parseToolCalls(rawText, toolRequest);
     if (parsed.toolCalls.length > 0) {
       toolCalls = parsed.toolCalls;

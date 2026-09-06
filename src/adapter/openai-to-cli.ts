@@ -8,6 +8,7 @@
 
 import type { OpenAIChatRequest, OpenAIMessageContent } from "../types/openai.js";
 import { toolDefsToPrompt, toolResultToPrompt, assistantToolCallsToPrompt, shouldBridgeExternalTools, externalNativeToolDisallowList } from "./tools.js";
+import { openaiToolsToMcp, type McpToolDef } from "./mcp-bridge.js";
 import { resolveModel, resolveModelRequest, ALL_EFFORT_LEVELS, type ClaudeEffort, type ClaudeModelDefinition } from "../models/registry.js";
 
 /** Kept for downstream files; canonical IDs come from the registry now. */
@@ -64,6 +65,12 @@ export interface CliInput {
   strictMcpConfig?: boolean;
   /** Erlaubnisliste der eingebauten Werkzeuge; [] = --tools "". Nur serverseitig. */
   tools?: string[];
+  /**
+   * Hermes' Werkzeuge in MCP-Form. Gesetzt, wenn das Profil `toolBridge:"mcp"`
+   * sagt und die Anfrage Werkzeuge mitbringt. Dann bleibt der Prompt frei von
+   * Werkzeugschemata — sie gehen ueber das Kontrollprotokoll.
+   */
+  mcpTools?: McpToolDef[];
   /**
    * JSON Schema for structured output; mapped to claude --json-schema.
    * Headless-only, independent of --output-format -- verified against the
@@ -723,6 +730,13 @@ export interface OpenaiToCliOptions {
    * cannot or should not control (bare, isolateCwd, injectOAuthEnv).
    * Unset fields leave request-body values intact.
    */
+  /**
+   * Werkzeuge ueber MCP statt als Text anbieten. Schaltet den
+   * `<claude_proxy_openai_tools>`-Block im Prompt ab — beide Wege gleichzeitig
+   * waeren doppelte Werkzeuge und damit ein Modell, das sich aussuchen darf,
+   * welchen es nimmt.
+   */
+  mcpToolBridge?: boolean;
   forceFlags?: {
     bare?: boolean;
     disableSlashCommands?: boolean;
@@ -781,6 +795,9 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
       if (forced) systemPrompt = forced;
     }
   }
+  // MCP-Werkzeuge nur, wenn der Aufrufer welche mitschickt UND das Profil den
+  // Weg waehlt. Ohne Werkzeuge in der Anfrage gibt es nichts anzumelden.
+  const mcpWerkzeuge = opts.mcpToolBridge ? openaiToolsToMcp(request) : [];
   const maxTurns = extractMaxTurns(request.max_turns);
   let isolateCwd: boolean | undefined;
   let injectOAuthEnv: boolean | undefined;
@@ -802,7 +819,7 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
     if (opts.forceFlags.tools !== undefined) tools = [...opts.forceFlags.tools];
   }
   return {
-    prompt: messagesToPrompt(request.messages, request),
+    prompt: messagesToPrompt(request.messages, opts.mcpToolBridge ? undefined : request),
     model: def.id,
     sessionId: request.user,
     ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
@@ -824,5 +841,6 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
     ...(restricted !== undefined ? { restricted } : {}),
     ...(strictMcpConfig !== undefined ? { strictMcpConfig } : {}),
     ...(tools !== undefined ? { tools } : {}),
+    ...(mcpWerkzeuge.length > 0 ? { mcpTools: mcpWerkzeuge } : {}),
   };
 }

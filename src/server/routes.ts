@@ -11,6 +11,7 @@ import { acquireSubprocess, type AcquireOptions } from "../subprocess/pool.js";
 import { acquireSession, returnSession, discardSession } from "../subprocess/session-pool.js";
 import { acquirePreInit } from "../subprocess/init-pool.js";
 import { getProfile, type Profile } from "./profiles.js";
+import type { McpToolDef } from "../adapter/mcp-bridge.js";
 import { StreamJsonSubprocess } from "../subprocess/stream-json-manager.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
@@ -311,6 +312,7 @@ export function assertHaertungNichtVerloren(
 export function cliInputForProfile(body: OpenAIChatRequest, profile: Profile) {
   const cliInput = openaiToCli(body, {
     mapResponseFormat: profile.mapResponseFormat,
+    mcpToolBridge: profile.toolBridge === "mcp",
     forceFlags: {
       bare: profile.bare,
       disableSlashCommands: profile.disableSlashCommands,
@@ -363,10 +365,12 @@ export interface Haertung {
   restricted?: boolean;
   strictMcpConfig?: boolean;
   tools?: string[];
+  /** Hermes' Werkzeuge in MCP-Form; leer/fehlend = Bruecke aus. */
+  mcpTools?: McpToolDef[];
 }
 
 export async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string, isolateCwd?: boolean, injectOAuthEnv?: boolean, haertung: Haertung = {}): Promise<StreamJsonSubprocess> {
-  const { restricted, strictMcpConfig, tools } = haertung;
+  const { restricted, strictMcpConfig, tools, mcpTools } = haertung;
   // Stateless always cold-spawns; charge a token if a callerKey is provided.
   if (callerKey) {
     const limit = consumeColdSpawnToken(callerKey);
@@ -386,7 +390,7 @@ export async function acquireStatelessStreamJson(model: string, disallowedTools:
   // Flags müssen nicht mehr leer sein, sie müssen nur zum Slot passen; das
   // Prüfen übernimmt der Pool an den tatsächlich verwendeten Werten.
   if (bare && isolateCwd && injectOAuthEnv) {
-    return acquirePreInit(model, { disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv, restricted, strictMcpConfig, tools });
+    return acquirePreInit(model, { disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv, restricted, strictMcpConfig, tools, mcpTools });
   }
   // ACHTUNG, hier sass eine Luecke: dieser Zweig gibt einen Prozess aus dem
   // Vorrat zurueck, der OHNE JEDES FLAG gestartet wurde. Die Bedingung muss
@@ -395,12 +399,12 @@ export async function acquireStatelessStreamJson(model: string, disallowedTools:
   // zurueck. Das waere kein Fehler mit Fehlermeldung, sondern eine stille
   // Aufhebung der Sperre. Wer hier ein Spawn-Argument ergaenzt, ergaenzt es
   // auch in dieser Zeile.
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv && !restricted && !strictMcpConfig && tools === undefined) return acquirePreInit(model);
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv && !restricted && !strictMcpConfig && tools === undefined && mcpTools === undefined) return acquirePreInit(model);
   // Übrige Kombinationen: einmaliger Prozess. Der Pool könnte sie technisch
   // auch halten, aber ihre Flags kommen aus dem Client-Body — der Schlüsselraum
   // wäre offen, und beliebige Fremdaufrufe würden die Honcho-Slots verdrängen.
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv, restricted, strictMcpConfig, tools });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv, restricted, strictMcpConfig, tools, mcpTools });
   return subprocess;
 }
 
@@ -986,7 +990,7 @@ async function handleStreamJsonRequest(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey, cliInput.isolateCwd, cliInput.injectOAuthEnv, { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools });
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey, cliInput.isolateCwd, cliInput.injectOAuthEnv, { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools, mcpTools: cliInput.mcpTools });
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
@@ -1234,7 +1238,14 @@ async function handleStreamJsonRequest(
     annotateAndRecordUsage(result, model);
 
     const rawText = result.result || assistantText;
-    const parsed = parseToolCalls(rawText, body);
+    // Strukturierte Aufrufe haben Vorrang: sie stammen aus den
+    // `tool_use`-Bloecken der Assistenten-Nachricht, nicht aus geratenem Text.
+    // Ist keiner da, bleibt der Textparser als Rueckfall — genau wie im
+    // nicht-streamenden Pfad (cliResultToOpenai).
+    const mcpCalls = subprocess.takeMcpToolCalls();
+    const parsed = mcpCalls.length > 0
+      ? { toolCalls: mcpCalls, textContent: rawText, diagnostics: { jsonObjects: 0, malformedJsonObjects: 0, rejectedToolCalls: 0, attemptedToolCall: false } }
+      : parseToolCalls(rawText, body);
     recordToolCallParseOutcome(parsed, bridgeTools);
 
     const finishReason = parsed.toolCalls.length > 0 ? "tool_calls" as const : "stop" as const;
@@ -1269,7 +1280,7 @@ async function handleStreamJsonRequest(
       res.end();
     } else if (!stream && !res.headersSent) {
       setUsageHeaders(res, result);
-      res.json(cliResultToOpenai(result, requestId, body, cliInput.model));
+      res.json(cliResultToOpenai(result, requestId, body, cliInput.model, subprocess.takeMcpToolCalls()));
     }
 
     // Re-pool or retain the subprocess for the next turn according to session mode.
@@ -1589,7 +1600,7 @@ async function handleResponsesStreamJson(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey, cliInput.isolateCwd, cliInput.injectOAuthEnv, { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools });
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey, cliInput.isolateCwd, cliInput.injectOAuthEnv, { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools, mcpTools: cliInput.mcpTools });
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
@@ -1679,7 +1690,7 @@ async function handleResponsesStreamJson(
       }
       res.end();
     } else if (!stream && !res.headersSent) {
-      const chatResponse = cliResultToOpenai(resultForAdapters, requestId, chatReq, cliInput.model);
+      const chatResponse = cliResultToOpenai(resultForAdapters, requestId, chatReq, cliInput.model, subprocess.takeMcpToolCalls());
       res.json(chatResponseToResponses(chatResponse, requestId));
     }
   } catch (error) {
@@ -2250,7 +2261,7 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
       extractCallerKey(req),
       cliInput.isolateCwd,
       cliInput.injectOAuthEnv,
-      { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools },
+      { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools, mcpTools: cliInput.mcpTools },
     );
   } catch (err) {
     if (isColdSpawnRateLimitedError(err)) {
@@ -2288,7 +2299,7 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
     tb.setFinishReason("stop");
     tb.commit();
     setUsageHeaders(res, result);
-    res.json(cliResultToOpenai(result, requestId, body, cliInput.model));
+    res.json(cliResultToOpenai(result, requestId, body, cliInput.model, subprocess.takeMcpToolCalls()));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     tb.setError(classifyError(err), message);

@@ -168,6 +168,7 @@ const ALLE_FLAGS = [
   "--agent",
   "--agents",
   "--disallowed-tools",
+  "--allowedTools",
 ];
 
 function mitFlags(): void {
@@ -195,6 +196,47 @@ test("buildSpawnArgs setzt die drei Härtungsflags", async () => {
     assert.ok(args.includes("--no-session-persistence"));
   } finally {
     resetClaudeCliCapabilitiesForTests();
+  }
+});
+
+test("buildSpawnArgs gibt MCP-Werkzeuge frei — SONST haengt der Aufruf", async () => {
+  // Ohne diese Freigabe laeuft jeder Werkzeugaufruf in den Genehmigungsfluss,
+  // und headless sitzt niemand da, der zustimmt. Der Platzhalter ist erlaubt,
+  // weil der Servername davorsteht.
+  mitFlags();
+  try {
+    const args = await buildSpawnArgs({
+      model: "claude-haiku-4-5",
+      tools: [],
+      mcpTools: [{ name: "terminal", description: "x", inputSchema: { type: "object" }, execution: { taskSupport: "forbidden" } }],
+      mcpServerName: "hermes",
+    });
+    const i = args.indexOf("--allowedTools");
+    assert.notEqual(i, -1, "--allowedTools fehlt");
+    assert.equal(args[i + 1], "mcp__hermes__*");
+    // UND die pauschale Sperre steht daneben. Im Mitschnitt der echten
+    // Leitung standen beide zusammen — sie schliessen einander nicht aus.
+    const t = args.indexOf("--tools");
+    assert.notEqual(t, -1);
+    assert.equal(args[t + 1], "");
+  } finally {
+    resetClaudeCliCapabilitiesForTests();
+  }
+});
+
+test("buildSpawnArgs gibt nichts frei, wenn es keine MCP-Werkzeuge gibt", async () => {
+  mitFlags();
+  try {
+    const args = await buildSpawnArgs({ model: "claude-haiku-4-5", tools: [] });
+    assert.equal(args.includes("--allowedTools"), false, "ohne Werkzeuge keine Freigabe");
+  } finally {
+    resetClaudeCliCapabilitiesForTests();
+  }
+});
+
+test("beide Profile fahren die MCP-Bruecke", () => {
+  for (const name of listProfiles()) {
+    assert.equal((getProfile(name) as Profile).toolBridge, "mcp", `${name} muss ueber MCP gehen`);
   }
 });
 

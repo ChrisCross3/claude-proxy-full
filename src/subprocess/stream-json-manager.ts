@@ -35,8 +35,10 @@ import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { getSecretResolutionDecisions, loadOpenclawMcpServers, type ResolvedMcpServer } from "../mcp/openclaw-config.js";
 import { applyMcpPolicy, secretDecisionsToTrace } from "../mcp/governance.js";
 import type { TraceMcpDecision } from "../trace/types.js";
-import { parseStreamJsonLine } from "./stream-json-parser.js";
+import { parseStreamJsonLine, type ClaudeControlRequest } from "./stream-json-parser.js";
 import { createChunkDecoder, killProcessTree, type ChunkDecoder } from "./hardening.js";
+import { handleMcpMessage, mcpToolPrefix, extractToolCallsFromAssistant, MCP_SERVER_NAME, type McpToolDef } from "../adapter/mcp-bridge.js";
+import type { OpenAIToolCall } from "../types/openai.js";
 import { pushClaudeFlagIfSupported } from "./claude-flags.js";
 import type { ClaudeEffort } from "../models/registry.js";
 import type { ClaudePermissionMode } from "../adapter/openai-to-cli.js";
@@ -209,6 +211,19 @@ export interface StreamJsonOptions {
    * --json-schema <schema>` kam schemakonformes JSON zurueck.
    */
   tools?: string[];
+  /**
+   * Hermes' Werkzeuge, die als ECHTE MCP-Werkzeuge angeboten werden statt als
+   * Text im Prompt. Leer oder fehlend = die Bruecke ist aus.
+   *
+   * Gehoert zum Fingerabdruck des Vorrats (PoolSpawnConfig), und das ist
+   * richtig so: ein Prozess, der mit anderen Werkzeugen initialisiert wurde,
+   * kann sie nicht nachtraeglich bekommen. Hermes' Liste ist stabil (19
+   * Werkzeuge, gemessen), also kostet das genau EINE zusaetzliche
+   * Konfiguration.
+   */
+  mcpTools?: McpToolDef[];
+  /** Servername; steckt im Werkzeugnamen als `mcp__<name>__<werkzeug>`. */
+  mcpServerName?: string;
 }
 
 /**
@@ -382,6 +397,22 @@ export async function buildSpawnArgs(options: StreamJsonOptions): Promise<string
       requestedValueLabel: liste === "" ? '"" (alle Werkzeuge aus)' : liste,
     });
   }
+  // Freigabe fuer unsere eigenen MCP-Werkzeuge. OHNE DIESE ZEILE laeuft jeder
+  // Aufruf in den Genehmigungsfluss und bleibt haengen — headless sitzt
+  // niemand da, der zustimmt.
+  //
+  // Der Platzhalter ist erlaubt, weil der Servername davorsteht: Anthropic
+  // laesst Namensglobs in Freigaberegeln "only after a literal
+  // mcp__<server>__ prefix". `--tools ""` daneben ist KEIN Widerspruch — im
+  // Mitschnitt der echten Leitung standen beide nebeneinander.
+  if (options.mcpTools && options.mcpTools.length > 0) {
+    const muster = `${mcpToolPrefix(options.mcpServerName ?? MCP_SERVER_NAME)}*`;
+    await pushClaudeFlagIfSupported(args, "--allowedTools", {
+      value: muster,
+      strict: true,
+      requestedValueLabel: muster,
+    });
+  }
   // Structured output through the CLI's own schema validator.
   //
   // Upstream calls --json-schema "print mode only", which reads like a
@@ -447,9 +478,26 @@ export class StreamJsonSubprocess extends EventEmitter {
   private lastProcessActivityAt: number = 0;
   private processActivityCount: number = 0;
   private mcpDecisions: TraceMcpDecision[] = [];
+  /** Werkzeuge, die dieser Prozess ueber MCP anbietet. Aus den Spawn-Optionen. */
+  private mcpTools: McpToolDef[] = [];
+  private mcpServerName: string = MCP_SERVER_NAME;
+  /**
+   * Werkzeugaufrufe des laufenden Zuges, aus den `tool_use`-Bloecken der
+   * Assistenten-Nachrichten. Wird von `takeMcpToolCalls()` geleert.
+   *
+   * Warum hier und nicht im Handler: es gibt vier Handler (Chat, Streaming,
+   * Responses, isoliert), und jeder haette sonst denselben Zuhoerer gebraucht.
+   * Vier Kopien einer Sammelstelle waeren vier Gelegenheiten, eine zu
+   * vergessen.
+   */
+  private mcpToolCalls: OpenAIToolCall[] = [];
 
   /** Spawn the subprocess and complete the initialize handshake. */
   async start(options: StreamJsonOptions): Promise<void> {
+    // Vor dem Spawn setzen: der Handshake meldet die Server an, und die
+    // Kontrollanfragen der CLI kommen unmittelbar danach.
+    this.mcpTools = options.mcpTools ?? [];
+    this.mcpServerName = options.mcpServerName ?? MCP_SERVER_NAME;
     const args = await buildSpawnArgs(options);
 
     // Option A: register openclaw-known MCP servers with the inner claude
@@ -552,6 +600,9 @@ export class StreamJsonSubprocess extends EventEmitter {
         subtype: "initialize",
         hooks: null,
         excludeDynamicSections: true,
+        // Nur die NAMEN, keine Schemata — die fragt die CLI gleich danach per
+        // `tools/list` ab. Genau so steht es im Mitschnitt des offiziellen SDK.
+        ...(this.mcpTools.length > 0 ? { sdkMcpServers: [this.mcpServerName] } : {}),
       },
     };
 
@@ -698,12 +749,77 @@ export class StreamJsonSubprocess extends EventEmitter {
         continue;
       }
 
+      if (parsed.kind === "control_request") {
+        this.answerControlRequest(parsed.value);
+        continue;
+      }
+
       this.emit("message", parsed.value as ClaudeCliMessage);
       const m = parsed.value as ClaudeCliMessage;
       if (isContentDelta(m)) this.emit("content_delta", m as ClaudeCliStreamEvent);
-      else if (isAssistantMessage(m)) this.emit("assistant", m as ClaudeCliAssistant);
+      else if (isAssistantMessage(m)) {
+        // Die Aufrufe stehen hier bereits strukturiert. Einsammeln, BEVOR der
+        // Handler die Nachricht sieht — er soll sie fertig vorfinden.
+        if (this.mcpTools.length > 0) {
+          this.mcpToolCalls.push(...extractToolCallsFromAssistant(m, this.mcpServerName));
+        }
+        this.emit("assistant", m as ClaudeCliAssistant);
+      }
       else if (isResultMessage(m)) this.emit("result", m as ClaudeCliResult);
     }
+  }
+
+  /**
+   * Beantwortet eine Kontrollanfrage der CLI.
+   *
+   * JEDE Anfrage bekommt eine Antwort — auch die, die wir nicht kennen. Eine
+   * unbeantwortete Anfrage laesst die CLI warten, und ein Haenger ist teurer
+   * als ein Fehler. Das offizielle SDK verfaehrt genauso ("Unsupported control
+   * request subtype").
+   *
+   * Gemessen mit unserer Flag-Kombination ueber zwei Zuege, einen
+   * Werkzeugfehler und einen Wiederholungsversuch: es kommt AUSSCHLIESSLICH
+   * `mcp_message`. Die anderen zwoelf Untertypen, die das SDK kennt, gehoeren
+   * zu Funktionen, die wir nicht eingeschaltet haben (Genehmigungsdialoge,
+   * Hooks, Token-Refresh, Remote Control). Der `default`-Zweig ist trotzdem
+   * kein toter Code, sondern die Wache dafuer, dass sich das aendert.
+   */
+  private answerControlRequest(req: ClaudeControlRequest): void {
+    const requestId = req.request_id;
+    if (req.request?.subtype === "mcp_message") {
+      const antwort = handleMcpMessage(req.request.message, this.mcpTools, this.mcpServerName);
+      this.writeLine({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: requestId,
+          response: { mcp_response: antwort },
+        },
+      });
+      return;
+    }
+    this.writeLine({
+      type: "control_response",
+      response: {
+        subtype: "error",
+        request_id: requestId,
+        error: `Unsupported control request subtype: ${req.request?.subtype}`,
+      },
+    });
+  }
+
+  /**
+   * Gibt die gesammelten Werkzeugaufrufe heraus und leert den Puffer.
+   *
+   * Leeren ist Absicht: ein wiederverwendeter Prozess darf die Aufrufe des
+   * vorigen Zuges nicht ein zweites Mal melden. Bei erzwungenem `stateless`
+   * kann das heute nicht passieren — aber der Puffer soll auch dann richtig
+   * sein, wenn diese Erzwingung eines Tages faellt.
+   */
+  takeMcpToolCalls(): OpenAIToolCall[] {
+    const calls = this.mcpToolCalls;
+    this.mcpToolCalls = [];
+    return calls;
   }
 
   /** Politely close stdin so claude exits after current turn. */
