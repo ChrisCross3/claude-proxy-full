@@ -2,6 +2,19 @@ name: Pricing Refresh
 
 # Weekly auto-refresh of the Anthropic pricing book embedded in
 # src/server/pricing.ts. Opens a PR with the diff for human review.
+#
+# Versionen 2026-09-06 nachgezogen. Dieser Workflow war als einziger im Repo
+# auf actions/*@v4 und Node 22 zurueckgeblieben, waehrend ci.yml und
+# release.yml laengst auf v7 und Node 24 standen -- ein Rueckstand, den
+# niemand sieht, weil der Job nur montags laeuft und sein Ergebnis ein PR ist.
+#
+# Nicht nur Aktualitaet: GitHub zwingt JavaScript-Actions seit dem 02.06.2026
+# auf die Node-24-Laufzeit, und Node 20 ist seit September 2026 ganz entfernt.
+# v4-Actions laufen damit auf einer Laufzeit, fuer die sie nicht gebaut sind.
+#
+# Alle Fremd-Actions sind auf den COMMIT gepinnt, nicht auf ein bewegliches
+# Tag. Ein Tag kann umgehaengt werden; bei einer Action mit Schreibrechten auf
+# das Repository ist das der ganze Angriff.
 
 on:
   schedule:
@@ -20,12 +33,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
@@ -35,7 +48,7 @@ jobs:
         run: node scripts/update-pricing.mjs
 
       - name: Open PR with refreshed pricing
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: chore/pricing-refresh
           base: ${{ github.ref_name }}
