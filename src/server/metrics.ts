@@ -80,6 +80,36 @@ export function recordErrorClass(cls: ProtocolErrorClass): void {
   errorClassCounters[cls] = (errorClassCounters[cls] || 0) + 1;
 }
 
+/**
+ * Auf WELCHEM Weg ein Werkzeugaufruf hereinkam.
+ *
+ * Der Zaehler ist die Wache gegen stille Protokolldrift: das
+ * Kontrollprotokoll der CLI ist kein oeffentlicher Vertrag, und wenn ein
+ * CLI-Update es bricht, faellt der Proxy auf die Textbruecke zurueck — und
+ * die funktioniert ja, nur schlechter (gemessen 6 von 10). Ohne diesen
+ * Zaehler waere der Rueckfall unsichtbar: es gaebe keine Fehlermeldung,
+ * nur wieder verlorene Aufrufe.
+ *
+ * `text > 0` bei einem Aufrufer, der MCP-Werkzeuge angemeldet hat, ist
+ * deshalb ein BEFUND, kein Betriebszustand.
+ */
+export type ToolCallSource = "mcp" | "text";
+const toolCallSourceCounters: Record<ToolCallSource, number> = { mcp: 0, text: 0 };
+
+export function recordToolCallSource(source: ToolCallSource): void {
+  toolCallSourceCounters[source]++;
+}
+
+/** Nur fuer Tests. */
+export function resetToolCallSourceForTests(): void {
+  toolCallSourceCounters.mcp = 0;
+  toolCallSourceCounters.text = 0;
+}
+
+export function getToolCallSourceCounters(): Record<ToolCallSource, number> {
+  return { ...toolCallSourceCounters };
+}
+
 export function recordToolCallParse(outcome: ToolCallParseOutcome, callCount: number): void {
   toolCallParseCounters[outcome]++;
   toolCallParseCounters.total_calls += Math.max(0, callCount);
@@ -348,6 +378,14 @@ export function renderMetrics(): string {
   }
 
   // claude_proxy_tool_call_parse — tool call parse outcome counters
+  // claude_proxy_tool_call_source — auf welchem Weg der Aufruf hereinkam.
+  // `text` bei einem Aufrufer mit MCP-Werkzeugen heisst: das Protokoll ist
+  // gebrochen und der Rueckfall hat uebernommen. Siehe recordToolCallSource.
+  lines.push("# HELP claude_proxy_tool_call_source_total How tool calls arrived: mcp (structured) or text (fallback parser).");
+  lines.push("# TYPE claude_proxy_tool_call_source_total counter");
+  lines.push(`claude_proxy_tool_call_source_total{source="mcp"} ${toolCallSourceCounters.mcp}`);
+  lines.push(`claude_proxy_tool_call_source_total{source="text"} ${toolCallSourceCounters.text}`);
+
   lines.push("# HELP claude_proxy_tool_call_parse_total Tool call parse outcomes for caller-dispatched tool bridge.");
   lines.push("# TYPE claude_proxy_tool_call_parse_total counter");
   lines.push(`claude_proxy_tool_call_parse_total{outcome="emitted"} ${toolCallParseCounters.emitted}`);

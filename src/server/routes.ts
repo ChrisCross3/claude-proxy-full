@@ -35,13 +35,13 @@ import {
 } from "../adapter/cli-to-openai.js";
 import { parseToolCalls, shouldBridgeExternalTools, type ToolCallParseResult } from "../adapter/tools.js";
 import { classifyCliResultError, toOpenAiErrorBody } from "../adapter/cli-result-error.js";
-import type { OpenAIChatRequest, OpenAIChatChunk, ResponsesRequest } from "../types/openai.js";
+import type { OpenAIChatRequest, OpenAIChatChunk, ResponsesRequest, OpenAIToolCall} from "../types/openai.js";
 import type { ClaudeCliAssistant, ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
 import { attachN8nDetector } from "../n8n/detector.js";
 import { n8nProgressEnabled, getRunningExecution, formatProgress } from "../n8n/progress.js";
 import { resolveRuntime, defaultRuntime } from "../subprocess/runtime.js";
 import { poolStats } from "../subprocess/session-pool.js";
-import { recordRequest, recordSpawnFailure, recordTokenUsage, recordToolCallParse, recordErrorClass } from "./metrics.js";
+import { recordRequest, recordSpawnFailure, recordTokenUsage, recordToolCallParse, recordErrorClass, recordToolCallSource} from "./metrics.js";
 import { pricingSnapshot } from "./pricing.js";
 import { annotateClaudeUsage, modelFromResult, usageFromClaudeResult } from "./usage.js";
 import { UPSTREAM_SOFT_DEAD_MS, shouldTriggerSoftDead, buildSoftDeadDiagnostic, sampleDescendants } from "./watchdog.js";
@@ -361,6 +361,18 @@ export function enforceProfileSessionMode(
  * bei der irgendwann zwei Wahrheitswerte vertauscht werden und es niemandem
  * auffaellt, weil beide `boolean | undefined` sind.
  */
+/**
+ * Meldet den Weg, auf dem Werkzeugaufrufe hereinkamen, und reicht sie durch.
+ *
+ * Ein Einzeiler mit einem Zweck: den Zaehler an ALLEN Stellen zu bedienen,
+ * ohne ihn dreimal zu schreiben. Wer eine Stelle vergisst, verliert nicht die
+ * Funktion, sondern die Sichtbarkeit — und das faellt niemandem auf.
+ */
+function meldeWerkzeugweg(calls: OpenAIToolCall[]): OpenAIToolCall[] {
+  if (calls.length > 0) recordToolCallSource("mcp");
+  return calls;
+}
+
 export interface Haertung {
   restricted?: boolean;
   strictMcpConfig?: boolean;
@@ -994,6 +1006,19 @@ async function handleStreamJsonRequest(
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
+    // ABBRUCH DES AUFRUFERS. Hermes kann einen Zug mitten drin abbrechen
+    // ("Mid-turn user steering", conversation_loop.py). Ohne diesen Riegel
+    // laeuft der Unterprozess trotzdem bis zum Ende — der Aufrufer wartet
+    // nicht mehr darauf, das Kontingent wird aber verbraucht.
+    //
+    // `writableEnded` unterscheidet die beiden Faelle: bei einer normal
+    // beendeten Antwort ist es true, bei einem Abbruch false. Nur dann wird
+    // getoetet. Doppeltes Toeten ist unschaedlich (isKilled-Riegel im
+    // Manager), und der Prozess ist hier immer ein eigener — `stateless`
+    // holt keinen aus dem laufenden Betrieb.
+    res.on("close", () => {
+      if (!res.writableEnded) subprocess.kill();
+    });
   } else {
     const acquired = await acquireSession(model, body.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents, bare: cliInput.bare, disableSlashCommands: cliInput.disableSlashCommands, jsonSchema: cliInput.jsonSchema, maxTurns: cliInput.maxTurns, callerKey });
     subprocess = acquired.subprocess;
@@ -1243,9 +1268,12 @@ async function handleStreamJsonRequest(
     // Ist keiner da, bleibt der Textparser als Rueckfall — genau wie im
     // nicht-streamenden Pfad (cliResultToOpenai).
     const mcpCalls = subprocess.takeMcpToolCalls();
+    // Den WEG festhalten, nicht nur das Ergebnis: ein Rueckfall auf den
+    // Textparser waere sonst unsichtbar.
     const parsed = mcpCalls.length > 0
       ? { toolCalls: mcpCalls, textContent: rawText, diagnostics: { jsonObjects: 0, malformedJsonObjects: 0, rejectedToolCalls: 0, attemptedToolCall: false } }
       : parseToolCalls(rawText, body);
+    if (parsed.toolCalls.length > 0) recordToolCallSource(mcpCalls.length > 0 ? "mcp" : "text");
     recordToolCallParseOutcome(parsed, bridgeTools);
 
     const finishReason = parsed.toolCalls.length > 0 ? "tool_calls" as const : "stop" as const;
@@ -1280,7 +1308,7 @@ async function handleStreamJsonRequest(
       res.end();
     } else if (!stream && !res.headersSent) {
       setUsageHeaders(res, result);
-      res.json(cliResultToOpenai(result, requestId, body, cliInput.model, subprocess.takeMcpToolCalls()));
+      res.json(cliResultToOpenai(result, requestId, body, cliInput.model, meldeWerkzeugweg(subprocess.takeMcpToolCalls())));
     }
 
     // Re-pool or retain the subprocess for the next turn according to session mode.
@@ -1604,6 +1632,19 @@ async function handleResponsesStreamJson(
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
+    // ABBRUCH DES AUFRUFERS. Hermes kann einen Zug mitten drin abbrechen
+    // ("Mid-turn user steering", conversation_loop.py). Ohne diesen Riegel
+    // laeuft der Unterprozess trotzdem bis zum Ende — der Aufrufer wartet
+    // nicht mehr darauf, das Kontingent wird aber verbraucht.
+    //
+    // `writableEnded` unterscheidet die beiden Faelle: bei einer normal
+    // beendeten Antwort ist es true, bei einem Abbruch false. Nur dann wird
+    // getoetet. Doppeltes Toeten ist unschaedlich (isKilled-Riegel im
+    // Manager), und der Prozess ist hier immer ein eigener — `stateless`
+    // holt keinen aus dem laufenden Betrieb.
+    res.on("close", () => {
+      if (!res.writableEnded) subprocess.kill();
+    });
   } else {
     const acquired = await acquireSession(model, chatReq.messages, { disallowedTools: cliInput.disallowedTools, effort: cliInput.effort, thinking: cliInput.thinking, debug: cliInput.debug, maxBudgetUsd: cliInput.maxBudgetUsd, permissionMode: cliInput.permissionMode, systemPrompt: cliInput.systemPrompt, appendSystemPrompt: cliInput.appendSystemPrompt, agent: cliInput.agent, agents: cliInput.agents, bare: cliInput.bare, disableSlashCommands: cliInput.disableSlashCommands, jsonSchema: cliInput.jsonSchema, maxTurns: cliInput.maxTurns, callerKey });
     subprocess = acquired.subprocess;
@@ -1690,7 +1731,7 @@ async function handleResponsesStreamJson(
       }
       res.end();
     } else if (!stream && !res.headersSent) {
-      const chatResponse = cliResultToOpenai(resultForAdapters, requestId, chatReq, cliInput.model, subprocess.takeMcpToolCalls());
+      const chatResponse = cliResultToOpenai(resultForAdapters, requestId, chatReq, cliInput.model, meldeWerkzeugweg(subprocess.takeMcpToolCalls()));
       res.json(chatResponseToResponses(chatResponse, requestId));
     }
   } catch (error) {
@@ -2299,7 +2340,7 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
     tb.setFinishReason("stop");
     tb.commit();
     setUsageHeaders(res, result);
-    res.json(cliResultToOpenai(result, requestId, body, cliInput.model, subprocess.takeMcpToolCalls()));
+    res.json(cliResultToOpenai(result, requestId, body, cliInput.model, meldeWerkzeugweg(subprocess.takeMcpToolCalls())));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     tb.setError(classifyError(err), message);
