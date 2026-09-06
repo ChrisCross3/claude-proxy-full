@@ -31,8 +31,10 @@ test("extractModel resolves canonical IDs", () => {
 });
 
 test("extractModel resolves short aliases to canonical IDs", () => {
-  assert.equal(extractModel("opus"), "claude-opus-4-7");
-  assert.equal(extractModel("sonnet"), "claude-sonnet-4-6");
+  // Siehe registry.ts: kurze Namen folgen der aktuellen Generation.
+  assert.equal(extractModel("opus"), "claude-opus-5");
+  assert.equal(extractModel("sonnet"), "claude-sonnet-5");
+  assert.equal(extractModel("fable"), "claude-fable-5-1");
   assert.equal(extractModel("haiku"), "claude-haiku-4-5");
   // Dated form resolves to the same canonical id.
   assert.equal(extractModel("claude-haiku-4-5-20251001"), "claude-haiku-4-5");
@@ -250,9 +252,18 @@ test("validateThinkingForModel accepts when model supports thinking", () => {
   assert.doesNotThrow(() => validateThinkingForModel(sonnet, true));
 });
 
-test("validateThinkingForModel rejects thinking=true on Haiku — strict, no silent downgrade", () => {
-  const haiku = resolveModelStrict("claude-haiku-4-5-20251001");
-  assert.throws(() => validateThinkingForModel(haiku, true), /does not support extended thinking/);
+test("validateThinkingForModel rejects thinking=true when a model declares no thinking", () => {
+  // KORREKTUR 2026-09-06: hier stand Haiku 4.5 als Beispiel. Falsch --
+  // Anthropic fuehrt Haiku 4.5 ausdruecklich mit "Thinking: Extended"
+  // (manueller budget_tokens-Modus). Die Registry sagt seither `true`,
+  // und damit hat KEIN eingetragenes Modell mehr thinkingSupported=false.
+  //
+  // Der Riegel bleibt trotzdem gebraucht: er ist die Zusage, dass eine
+  // nicht erklaerte Faehigkeit hart abgewiesen und nicht still verschluckt
+  // wird. Geprueft wird er deshalb gegen eine erfundene Definition -- das
+  // ist kein Ersatz-Modell, sondern der Nachweis des Zweigs selbst.
+  const ohneDenken = { ...resolveModelStrict("claude-haiku-4-5"), thinkingSupported: false };
+  assert.throws(() => validateThinkingForModel(ohneDenken, true), /does not support extended thinking/);
 });
 
 test("validateThinkingForModel accepts thinking=false on Haiku (explicit off is fine)", () => {
@@ -280,13 +291,26 @@ test("openaiToCli accepts Anthropic-native thinking object", () => {
   assert.equal(openaiToCli(req as any).thinking, true);
 });
 
-test("openaiToCli throws when thinking is requested on a model that doesn't support it", () => {
+test("openaiToCli laesst thinking auf Haiku jetzt durch", () => {
+  // Gegenstueck zur Korrektur oben: Haiku 4.5 DENKT, nur im manuellen Modus.
   const req = {
     model: "claude-haiku-4-5-20251001",
     messages: [{ role: "user" as const, content: "hi" }],
     thinking: true,
   };
-  assert.throws(() => openaiToCli(req as any), /does not support extended thinking/);
+  assert.equal(openaiToCli(req as any).thinking, true);
+});
+
+test("openaiToCli throws when a capability is requested that the model lacks", () => {
+  // Der Ende-zu-Ende-Nachweis fuer "strikt, kein stiller Rueckfall" haengt
+  // jetzt am Effort: Haiku 4.5 ist laut Anthropic-Doku das Modell der
+  // aktuellen Reihe OHNE Effort ("Default effort: Not supported").
+  const req = {
+    model: "claude-haiku-4-5-20251001",
+    messages: [{ role: "user" as const, content: "hi" }],
+    reasoning_effort: "high",
+  };
+  assert.throws(() => openaiToCli(req as any), /does not support the --effort flag/);
 });
 
 test("openaiToCli omits thinking when the request doesn't set it", () => {

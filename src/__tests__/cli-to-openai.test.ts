@@ -11,8 +11,12 @@ test("normalizeModelName returns canonical id for known models (no legacy collap
 });
 
 test("normalizeModelName resolves short aliases to canonical ids", () => {
-  assert.equal(normalizeModelName("opus"), "claude-opus-4-7");
-  assert.equal(normalizeModelName("sonnet"), "claude-sonnet-4-6");
+  // Seit 2026-09-06 zeigen die kurzen Namen auf die AKTUELLE Generation --
+  // so, wie die CLI-Hilfe einen blossen Alias definiert ("an alias for the
+  // latest model"). Vorher standen hier 4-7 und 4-6.
+  assert.equal(normalizeModelName("opus"), "claude-opus-5");
+  assert.equal(normalizeModelName("sonnet"), "claude-sonnet-5");
+  assert.equal(normalizeModelName("fable"), "claude-fable-5-1");
   assert.equal(normalizeModelName("haiku"), "claude-haiku-4-5");
 });
 

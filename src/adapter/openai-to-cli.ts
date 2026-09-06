@@ -8,7 +8,7 @@
 
 import type { OpenAIChatRequest, OpenAIMessageContent } from "../types/openai.js";
 import { toolDefsToPrompt, toolResultToPrompt, assistantToolCallsToPrompt, shouldBridgeExternalTools, externalNativeToolDisallowList } from "./tools.js";
-import { resolveModel, ALL_EFFORT_LEVELS, type ClaudeEffort, type ClaudeModelDefinition } from "../models/registry.js";
+import { resolveModel, resolveModelRequest, ALL_EFFORT_LEVELS, type ClaudeEffort, type ClaudeModelDefinition } from "../models/registry.js";
 
 /** Kept for downstream files; canonical IDs come from the registry now. */
 export type ClaudeModel = string;
@@ -86,15 +86,27 @@ export function extractModel(model: string): string {
 
 /** Like extractModel, but returns the full definition for callers that need it. */
 export function resolveModelStrict(model: string): ClaudeModelDefinition {
-  const def = resolveModel(model);
-  if (!def) {
+  const req = resolveModelRequest(model);
+  if (!req) {
     throw new ModelValidationError(
       `Unknown Claude model id or alias: '${model}'. ` +
       `Add it to src/models/registry.ts if Anthropic has released it.`,
       'unknown_model',
     );
   }
-  return def;
+  // Ein [1m] auf einem Modell ohne freigeschaltete Variante lief bis
+  // 2026-09-06 stumm durch und starb erst an der API mit
+  // "The long context beta is not yet available for this subscription".
+  // Gemessen betrifft das claude-opus-4-5 und claude-haiku-4-5.
+  if (req.oneMillionRequested && !req.def.oneMillionContextVariant) {
+    throw new ModelValidationError(
+      `Model '${req.def.id}' has no [1m] context variant available here. ` +
+      `Drop the [1m] suffix or pick a model whose registry entry sets ` +
+      `oneMillionContextVariant (see src/models/registry.ts).`,
+      'one_million_context_unsupported',
+    );
+  }
+  return req.def;
 }
 
 /**
