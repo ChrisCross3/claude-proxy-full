@@ -72,12 +72,21 @@ export interface ClaudeModelDefinition {
    * ohne erweiterten Kontext aber auf 200K -- die 1M holt dort erst das
    * [1m]-Suffix. Wer hier die Zahl von der Modellseite eintraegt, verspricht
    * dem Aufrufer ein Fenster, das er nicht bekommt.
+   *
+   * Gelesen wird der Wert heute nur von der Clawdbot-Plugin-Definition
+   * (index.ts) -- siehe maxOutputTokens. Das macht ihn nicht unwichtig: er
+   * ist die Stelle, an der ein kuenftiger Aufrufer die Groesse erfaehrt.
    */
   contextWindow: number;
   /**
    * Maximum output tokens per response (synchronous Messages API limit).
-   * Nur Metadaten: der Proxy reicht den Wert in /v1/models durch (index.ts),
-   * er begrenzt nichts.
+   *
+   * WER DAS LIEST: `buildModelDefinition` in index.ts, also die
+   * Clawdbot-Plugin-Modelldefinition. Die HTTP-Antwort von /v1/models traegt
+   * die Groesse NICHT -- am laufenden Tenant nachgesehen, dort steht je
+   * Modell nur id/object/owned_by. Auf unserem Weg wirkt der Wert damit
+   * heute gar nicht; er begrenzt nichts und niemand fragt ihn ab. Er steht
+   * hier als belegte Eigenschaft des Modells, nicht als Stellschraube.
    */
   maxOutputTokens: number;
   /**
