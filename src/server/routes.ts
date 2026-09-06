@@ -1939,14 +1939,52 @@ async function handleResponsesStreaming(
 export function handleModels(_req: Request, res: Response): void {
   const created = Math.floor(Date.now() / 1000);
   // Advertised models — single source of truth is src/models/registry.ts.
-  const ids = MODELS.map((m) => m.id);
+  //
+  // GROESSEN UND FAEHIGKEITEN SEIT 2026-09-06 DABEI. Vorher trug die Antwort
+  // je Modell nur id/object/owned_by/created — die Registry kannte
+  // Kontextfenster, Ausgabegrenze, Effort-Stufen und Thinking, aber kein
+  // Aufrufer konnte sie erfahren. Er musste sie raten oder fest verdrahten,
+  // und eine fest verdrahtete Groesse veraltet still.
+  //
+  // DIE FELDNAMEN SIND NICHT ERFUNDEN, sondern die der Models-API von
+  // Anthropic (docs/en/api/models/list): `max_input_tokens` fuer das
+  // Kontextfenster, `max_tokens` fuer die Ausgabegrenze, `display_name`, und
+  // ein `capabilities`-Objekt mit `effort` je Stufe und `thinking`. LiteLLM
+  // liest bei OpenAI-kompatiblen Backends ebenfalls `max_input_tokens` —
+  // dieselbe Wahl deckt also beide Welten ab.
+  //
+  // Die OpenAI-Pflichtfelder bleiben unangetastet: id, object, created,
+  // owned_by. Zusaetzliche Felder ignoriert ein OpenAI-Client.
+  //
+  // NICHT enthalten und warum: Anthropic gliedert `thinking.types` in
+  // `adaptive` und `enabled` (also adaptives gegen manuelles Denken). Diese
+  // Unterscheidung KENNT unsere Registry nicht — sie hat nur ein
+  // `thinkingSupported`-Tor. Sie hier zu erfinden waere eine Behauptung ueber
+  // das Modell, die durch nichts gedeckt ist; wer sie braucht, ergaenzt zuerst
+  // die Registry.
+  const stufen = ["low", "medium", "high", "xhigh", "max"] as const;
   res.json({
     object: "list",
-    data: ids.map((id) => ({
-      id,
+    data: MODELS.map((m) => ({
+      id: m.id,
       object: "model",
       owned_by: "anthropic",
       created,
+      display_name: m.name,
+      max_input_tokens: m.contextWindow,
+      max_tokens: m.maxOutputTokens,
+      capabilities: {
+        effort: {
+          supported: m.effortLevels.length > 0,
+          ...Object.fromEntries(stufen.map((s) => [s, { supported: m.effortLevels.includes(s) }])),
+        },
+        thinking: { supported: m.thinkingSupported },
+        // Eigener Name, kein Anthropic-Feld: die Models-API kennt keine
+        // [1m]-Variante, weil sie dort keine Rolle spielt. Fuer uns schon —
+        // ohne diese Angabe muss ein Aufrufer den Suffix ausprobieren und
+        // faengt dabei ein HTTP 400.
+        context_1m: { supported: m.oneMillionContextVariant },
+      },
     })),
   });
 }
