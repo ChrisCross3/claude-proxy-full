@@ -264,7 +264,109 @@ function recordSessionModeRejected(mode: ResolvedSessionOptions["mode"] | "stick
  * gate below is the part that decides warm-vs-cold, and it used to be
  * untestable from outside without driving a full HTTP request.
  */
-export async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string, isolateCwd?: boolean, injectOAuthEnv?: boolean): Promise<StreamJsonSubprocess> {
+/**
+ * Stolperdraht gegen den stillen Verlust der Haertung.
+ *
+ * Die Zweige "sticky" und "pool" reichen ihre Spawn-Argumente ueber EIGENE
+ * Optionsobjekte weiter (acquireStickySession, acquireSession), und die
+ * kennen die Haertungsflags nicht. Heute ist das folgenlos, weil das
+ * Lead-Profil "stateless" erzwingt und beide Zweige damit unerreichbar sind
+ * — aber das ist eine Eigenschaft der LAUFZEIT, keine des Bauplans. Faellt
+ * die Erzwingung eines Tages weg oder kommt ein zweiter Aufrufer dazu, wuerde
+ * eine gehaertete Anfrage klaglos auf einem ungehaerteten Prozess landen.
+ *
+ * Deshalb: laut scheitern statt leise weiterlaufen. Eine Ausnahme ist hier
+ * die richtige Antwort, weil der Fall nur durch einen Programmierfehler
+ * eintreten kann — und weil das Gegenteil, ein stiller Rueckfall, genau die
+ * Vermischung waere, gegen die die ganze Haertung gebaut ist.
+ */
+export function assertHaertungNichtVerloren(
+  cliInput: { restricted?: boolean; strictMcpConfig?: boolean; tools?: string[] },
+  mode: string,
+): void {
+  const gehaertet = cliInput.restricted || cliInput.strictMcpConfig || cliInput.tools !== undefined;
+  if (gehaertet && mode !== "stateless") {
+    throw new Error(
+      `Gehaertete Anfrage im Sitzungsmodus '${mode}': die Zweige sticky/pool tragen ` +
+      `restricted/strictMcpConfig/tools nicht weiter. Entweder den Modus auf stateless ` +
+      `zwingen (enforceProfileSessionMode) oder die Flags dort durchreichen — ` +
+      `ein stiller Rueckfall auf einen ungehaerteten Prozess ist keine Option.`,
+    );
+  }
+}
+
+/**
+ * Wendet ein Profil auf einen Anfragekoerper an und liefert den CliInput.
+ *
+ * WARUM DAS EINE FUNKTION IST: es gibt zwei Profile (lead und isolated), und
+ * sie unterscheiden sich heute in genau einem Feld. Chris hat sie bewusst
+ * getrennt gehalten, mit der Auflage, bei jeder Aenderung an BEIDE zu denken.
+ * Eine Auflage, an die man denken muss, ist die schwaechste Form von
+ * Absicherung — deshalb geht die Anwendung durch diesen einen Trichter. Wer
+ * hier ein Feld ergaenzt, ergaenzt es fuer beide, ohne es zu wollen.
+ *
+ * Die Sperrliste wird VEREINIGT, nie ersetzt: ein Aufrufer darf hinzufuegen,
+ * niemals wegnehmen.
+ */
+export function cliInputForProfile(body: OpenAIChatRequest, profile: Profile) {
+  const cliInput = openaiToCli(body, {
+    mapResponseFormat: profile.mapResponseFormat,
+    forceFlags: {
+      bare: profile.bare,
+      disableSlashCommands: profile.disableSlashCommands,
+      isolateCwd: profile.isolateCwd,
+      injectOAuthEnv: profile.injectOAuthEnv,
+      restricted: profile.restricted,
+      strictMcpConfig: profile.strictMcpConfig,
+      tools: profile.tools,
+    },
+  });
+  if (profile.forceDisallowedTools.length > 0) {
+    const merged = new Set([...(cliInput.disallowedTools ?? []), ...profile.forceDisallowedTools]);
+    cliInput.disallowedTools = Array.from(merged);
+  }
+  return cliInput;
+}
+
+/**
+ * Erzwingt den Sitzungsmodus des Profils.
+ *
+ * "stateless" heisst: eigener Unterprozess je Anfrage, danach getoetet. Damit
+ * faellt die Wiederverwendung ueber Anfragen hinweg weg — und genau die ist
+ * der einzige Weg, auf dem zwei Aufrufer denselben Verlauf sehen koennten.
+ * Der VORRAT (init-pool) bleibt davon unberuehrt: er haelt frisch
+ * initialisierte, UNBENUTZTE Prozesse, und der Kaltstart von rund 5 s ist
+ * damit weiterhin bezahlt.
+ *
+ * Ein Aufrufer, der ausdruecklich "sticky" verlangt hat, bekommt trotzdem
+ * stateless. Das ist Absicht und keine stille Enteignung: die Entscheidung
+ * ueber Kontexttrennung gehoert nicht dem Aufrufer. Sichtbar wird es in der
+ * Telemetrie, weil die Ueberschreibung VOR setSessionMode passiert.
+ */
+export function enforceProfileSessionMode(
+  resolved: ResolvedSessionOptions,
+  profile: Profile,
+): ResolvedSessionOptions {
+  if (!profile.sessionMode) return resolved;
+  if (resolved.mode === profile.sessionMode) return resolved;
+  return { mode: profile.sessionMode };
+}
+
+/**
+ * Die Haertungsflags reisen als EIN Objekt am Ende, nicht als drei weitere
+ * Stellungsparameter. Diese Signatur hat bereits achtzehn davon; ein
+ * neunzehnter, zwanzigster und einundzwanzigster waeren die Sorte Aenderung,
+ * bei der irgendwann zwei Wahrheitswerte vertauscht werden und es niemandem
+ * auffaellt, weil beide `boolean | undefined` sind.
+ */
+export interface Haertung {
+  restricted?: boolean;
+  strictMcpConfig?: boolean;
+  tools?: string[];
+}
+
+export async function acquireStatelessStreamJson(model: string, disallowedTools: string[] = [], effort?: ClaudeEffort, thinking?: boolean, debug?: string, maxBudgetUsd?: number, permissionMode?: ClaudePermissionMode, systemPrompt?: string, appendSystemPrompt?: string, agent?: string, agents?: Record<string, unknown>, bare?: boolean, disableSlashCommands?: boolean, jsonSchema?: Record<string, unknown>, maxTurns?: number, callerKey?: string, isolateCwd?: boolean, injectOAuthEnv?: boolean, haertung: Haertung = {}): Promise<StreamJsonSubprocess> {
+  const { restricted, strictMcpConfig, tools } = haertung;
   // Stateless always cold-spawns; charge a token if a callerKey is provided.
   if (callerKey) {
     const limit = consumeColdSpawnToken(callerKey);
@@ -284,14 +386,21 @@ export async function acquireStatelessStreamJson(model: string, disallowedTools:
   // Flags müssen nicht mehr leer sein, sie müssen nur zum Slot passen; das
   // Prüfen übernimmt der Pool an den tatsächlich verwendeten Werten.
   if (bare && isolateCwd && injectOAuthEnv) {
-    return acquirePreInit(model, { disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv });
+    return acquirePreInit(model, { disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv, restricted, strictMcpConfig, tools });
   }
-  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv) return acquirePreInit(model);
+  // ACHTUNG, hier sass eine Luecke: dieser Zweig gibt einen Prozess aus dem
+  // Vorrat zurueck, der OHNE JEDES FLAG gestartet wurde. Die Bedingung muss
+  // deshalb jedes Flag kennen, das es gibt — sonst faellt eine gehaertete
+  // Anfrage, die zufaellig sonst nichts setzt, auf einen UNGEHAERTETEN Prozess
+  // zurueck. Das waere kein Fehler mit Fehlermeldung, sondern eine stille
+  // Aufhebung der Sperre. Wer hier ein Spawn-Argument ergaenzt, ergaenzt es
+  // auch in dieser Zeile.
+  if (disallowedTools.length === 0 && !effort && thinking === undefined && !debug && maxBudgetUsd === undefined && !permissionMode && !systemPrompt && !appendSystemPrompt && !agent && !agents && !bare && !disableSlashCommands && !jsonSchema && maxTurns === undefined && !isolateCwd && !injectOAuthEnv && !restricted && !strictMcpConfig && tools === undefined) return acquirePreInit(model);
   // Übrige Kombinationen: einmaliger Prozess. Der Pool könnte sie technisch
   // auch halten, aber ihre Flags kommen aus dem Client-Body — der Schlüsselraum
   // wäre offen, und beliebige Fremdaufrufe würden die Honcho-Slots verdrängen.
   const subprocess = new StreamJsonSubprocess();
-  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv });
+  await subprocess.start({ model, disallowedTools, effort, thinking, debug, maxBudgetUsd, permissionMode, systemPrompt, appendSystemPrompt, agent, agents, bare, disableSlashCommands, jsonSchema, maxTurns, isolateCwd, injectOAuthEnv, restricted, strictMcpConfig, tools });
   return subprocess;
 }
 
@@ -405,14 +514,19 @@ export async function handleChatCompletions(
       return;
     }
 
-    const sessionOptions = resolveSessionOptions(req);
-    if (isSessionOptionsError(sessionOptions)) {
-      tb.setError("invalid_request", sessionOptions.message);
+    const angefragterModus = resolveSessionOptions(req);
+    if (isSessionOptionsError(angefragterModus)) {
+      tb.setError("invalid_request", angefragterModus.message);
       tb.commit();
       recordSessionModeRejected("sticky");
-      sendSessionOptionsError(res, sessionOptions);
+      sendSessionOptionsError(res, angefragterModus);
       return;
     }
+    // Das Profil entscheidet ueber Kontexttrennung, nicht der Aufrufer. Die
+    // Ueberschreibung steht VOR setSessionMode/recordSessionModeAccepted,
+    // damit Telemetrie und Ablaufverfolgung den WIRKSAMEN Modus zeigen und
+    // nicht den gewuenschten.
+    const sessionOptions = enforceProfileSessionMode(angefragterModus, getProfile("lead")!);
     tb.setSessionMode(sessionOptions.mode);
     recordSessionModeAccepted(sessionOptions.mode);
 
@@ -482,7 +596,7 @@ export async function handleChatCompletions(
     usedRuntime = "print";
     tb.setRuntime("print");
     setTraceHeader(res, traceId);
-    const cliInput = openaiToCli(body);
+    const cliInput = cliInputForProfile(body, getProfile("lead")!);
     let subprocess: ClaudeSubprocess;
     try {
       subprocess = await acquireSubprocess(cliInput.model, { ...toAcquireOptions(cliInput), callerKey: extractCallerKey(req) });
@@ -820,7 +934,7 @@ async function handleStreamJsonRequest(
   tb: TraceBuilder,
   sessionOptions: ResolvedSessionOptions = { mode: "pool" },
 ): Promise<void> {
-  const cliInput = openaiToCli(body);
+  const cliInput = cliInputForProfile(body, getProfile("lead")!);
   const bridgeTools = shouldBridgeExternalTools(body);
   const callerKey = extractCallerKey(req);
 
@@ -828,6 +942,8 @@ async function handleStreamJsonRequest(
   let userText = cliInput.prompt;
   let releaseSuccess: (assistantText: string) => void;
   let releaseDiscard: (reason: StickyEvictionReason) => void;
+
+  assertHaertungNichtVerloren(cliInput, sessionOptions.mode);
 
   if (sessionOptions.mode === "sticky" && sessionOptions.sticky) {
     const sticky: StickyAcquireResult = await acquireStickySession({
@@ -870,7 +986,7 @@ async function handleStreamJsonRequest(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey, cliInput.isolateCwd, cliInput.injectOAuthEnv, { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools });
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
@@ -1320,14 +1436,19 @@ export async function handleResponses(
       return;
     }
 
-    const sessionOptions = resolveSessionOptions(req);
-    if (isSessionOptionsError(sessionOptions)) {
-      tb.setError("invalid_request", sessionOptions.message);
+    const angefragterModus = resolveSessionOptions(req);
+    if (isSessionOptionsError(angefragterModus)) {
+      tb.setError("invalid_request", angefragterModus.message);
       tb.commit();
       recordSessionModeRejected("sticky");
-      sendSessionOptionsError(res, sessionOptions);
+      sendSessionOptionsError(res, angefragterModus);
       return;
     }
+    // Das Profil entscheidet ueber Kontexttrennung, nicht der Aufrufer. Die
+    // Ueberschreibung steht VOR setSessionMode/recordSessionModeAccepted,
+    // damit Telemetrie und Ablaufverfolgung den WIRKSAMEN Modus zeigen und
+    // nicht den gewuenschten.
+    const sessionOptions = enforceProfileSessionMode(angefragterModus, getProfile("lead")!);
     tb.setSessionMode(sessionOptions.mode);
     recordSessionModeAccepted(sessionOptions.mode);
 
@@ -1416,7 +1537,7 @@ async function handleResponsesStreamJson(
   sessionOptions: ResolvedSessionOptions = { mode: "pool" },
 ): Promise<void> {
   const model = extractModel(chatReq.model);
-  const cliInput = openaiToCli(chatReq);
+  const cliInput = cliInputForProfile(chatReq, getProfile("lead")!);
   const bridgeTools = shouldBridgeExternalTools(chatReq);
   const callerKey = extractCallerKey(req);
 
@@ -1424,6 +1545,8 @@ async function handleResponsesStreamJson(
   let userText = cliInput.prompt;
   let releaseSuccess: (assistantText: string) => void;
   let releaseDiscard: (reason: StickyEvictionReason) => void;
+
+  assertHaertungNichtVerloren(cliInput, sessionOptions.mode);
 
   if (sessionOptions.mode === "sticky" && sessionOptions.sticky) {
     const sticky = await acquireStickySession({
@@ -1466,7 +1589,7 @@ async function handleResponsesStreamJson(
       sticky.release({ status: "discard", reason });
     };
   } else if (sessionOptions.mode === "stateless") {
-    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey);
+    subprocess = await acquireStatelessStreamJson(model, cliInput.disallowedTools, cliInput.effort, cliInput.thinking, cliInput.debug, cliInput.maxBudgetUsd, cliInput.permissionMode, cliInput.systemPrompt, cliInput.appendSystemPrompt, cliInput.agent, cliInput.agents, cliInput.bare, cliInput.disableSlashCommands, cliInput.jsonSchema, cliInput.maxTurns, callerKey, cliInput.isolateCwd, cliInput.injectOAuthEnv, { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools });
     tb.setSessionWarmHit(false);
     releaseSuccess = () => subprocess.kill();
     releaseDiscard = () => subprocess.kill();
@@ -1598,7 +1721,7 @@ async function handleResponsesNonStreaming(
   requestId: string,
   tb: TraceBuilder,
 ): Promise<void> {
-  const cliInput = openaiToCli(chatReq);
+  const cliInput = cliInputForProfile(chatReq, getProfile("lead")!);
   const subprocess = await acquireSubprocess(cliInput.model, { ...toAcquireOptions(cliInput), callerKey: extractCallerKey(req) });
 
   return new Promise((resolve) => {
@@ -1687,7 +1810,7 @@ async function handleResponsesStreaming(
   requestModel: string,
   tb: TraceBuilder,
 ): Promise<void> {
-  const cliInput = openaiToCli(chatReq);
+  const cliInput = cliInputForProfile(chatReq, getProfile("lead")!);
   const subprocess = await acquireSubprocess(cliInput.model, { ...toAcquireOptions(cliInput), callerKey: extractCallerKey(req) });
   const responseId = `resp_${requestId}`;
   const msgId = `msg_${uuidv4().replace(/-/g, "").slice(0, 12)}`;
@@ -2052,22 +2175,8 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
 
   let cliInput;
   try {
-    cliInput = openaiToCli(body, {
-      mapResponseFormat: profile.mapResponseFormat,
-      forceFlags: {
-        bare: profile.bare,
-        disableSlashCommands: profile.disableSlashCommands,
-        isolateCwd: profile.isolateCwd,
-        injectOAuthEnv: profile.injectOAuthEnv,
-      },
-    });
-    // Security: enforce profile.forceDisallowedTools server-side. Honcho-style
-    // callers process untrusted user input through a forced-JSON prompt; without
-    // this, --bare leaves Bash/Edit/Read available for prompt-injection abuse.
-    if (profile.forceDisallowedTools.length > 0) {
-      const merged = new Set([...(cliInput.disallowedTools ?? []), ...profile.forceDisallowedTools]);
-      cliInput.disallowedTools = Array.from(merged);
-    }
+    // Derselbe Trichter wie der Lead-Pfad — siehe cliInputForProfile.
+    cliInput = cliInputForProfile(body, profile);
   } catch (err) {
     if (err instanceof ModelValidationError) {
       res.status(400).json({
@@ -2103,6 +2212,7 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
       extractCallerKey(req),
       cliInput.isolateCwd,
       cliInput.injectOAuthEnv,
+      { restricted: cliInput.restricted, strictMcpConfig: cliInput.strictMcpConfig, tools: cliInput.tools },
     );
   } catch (err) {
     if (isColdSpawnRateLimitedError(err)) {

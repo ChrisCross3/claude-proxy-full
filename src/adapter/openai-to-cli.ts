@@ -54,6 +54,17 @@ export interface CliInput {
   /** Disable slash commands. */
   disableSlashCommands?: boolean;
   /**
+   * Eingeschraenkter Modus (claude --restricted). NUR serverseitig setzbar:
+   * es gibt keinen Weg aus dem Anfragekoerper hierher, das Feld kommt
+   * ausschliesslich aus einem Profil. Der Aufrufer darf seine eigene Fessel
+   * nicht loesen koennen.
+   */
+  restricted?: boolean;
+  /** claude --strict-mcp-config. Ebenfalls nur serverseitig. */
+  strictMcpConfig?: boolean;
+  /** Erlaubnisliste der eingebauten Werkzeuge; [] = --tools "". Nur serverseitig. */
+  tools?: string[];
+  /**
    * JSON Schema for structured output; mapped to claude --json-schema.
    * Headless-only, independent of --output-format -- verified against the
    * pinned 2.1.232 with --output-format stream-json, see the spawn-shape note
@@ -62,7 +73,7 @@ export interface CliInput {
   jsonSchema?: Record<string, unknown>;
   /** Cap agentic turns; mapped to claude --max-turns. Headless-only, independent of --output-format. */
   maxTurns?: number;
-  /** Inject Anthropic OAuth token as ANTHROPIC_API_KEY (server-side only, set by profile). */
+  /** Inject the Anthropic OAuth token as ANTHROPIC_AUTH_TOKEN (server-side only, set by profile). */
   injectOAuthEnv?: boolean;
   /** Spawn with cwd=os.tmpdir() (server-side only, set by profile). */
   isolateCwd?: boolean;
@@ -717,6 +728,9 @@ export interface OpenaiToCliOptions {
     disableSlashCommands?: boolean;
     isolateCwd?: boolean;
     injectOAuthEnv?: boolean;
+    restricted?: boolean;
+    strictMcpConfig?: boolean;
+    tools?: string[];
   };
 }
 
@@ -770,6 +784,9 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
   const maxTurns = extractMaxTurns(request.max_turns);
   let isolateCwd: boolean | undefined;
   let injectOAuthEnv: boolean | undefined;
+  let restricted: boolean | undefined;
+  let strictMcpConfig: boolean | undefined;
+  let tools: string[] | undefined;
   if (opts.forceFlags) {
     if (opts.forceFlags.bare !== undefined) bare = opts.forceFlags.bare;
     if (opts.forceFlags.disableSlashCommands !== undefined) {
@@ -777,6 +794,12 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
     }
     if (opts.forceFlags.isolateCwd !== undefined) isolateCwd = opts.forceFlags.isolateCwd;
     if (opts.forceFlags.injectOAuthEnv !== undefined) injectOAuthEnv = opts.forceFlags.injectOAuthEnv;
+    if (opts.forceFlags.restricted !== undefined) restricted = opts.forceFlags.restricted;
+    if (opts.forceFlags.strictMcpConfig !== undefined) strictMcpConfig = opts.forceFlags.strictMcpConfig;
+    // Kopie, nicht die Referenz des Profils: sonst kann ein spaeterer
+    // Bearbeitungsschritt am CliInput das PROFIL selbst veraendern, und die
+    // Haertung waere ab dann fuer alle Anfragen des Prozesses eine andere.
+    if (opts.forceFlags.tools !== undefined) tools = [...opts.forceFlags.tools];
   }
   return {
     prompt: messagesToPrompt(request.messages, request),
@@ -798,5 +821,8 @@ export function openaiToCli(request: OpenAIChatRequest, opts: OpenaiToCliOptions
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(isolateCwd !== undefined ? { isolateCwd } : {}),
     ...(injectOAuthEnv !== undefined ? { injectOAuthEnv } : {}),
+    ...(restricted !== undefined ? { restricted } : {}),
+    ...(strictMcpConfig !== undefined ? { strictMcpConfig } : {}),
+    ...(tools !== undefined ? { tools } : {}),
   };
 }

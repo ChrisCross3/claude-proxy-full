@@ -52,10 +52,38 @@ export interface Profile {
    */
   isolateCwd: boolean;
   /**
-   * Inject Anthropic OAuth token as ANTHROPIC_API_KEY env var. Required when
-   * bare=true, because --bare disables CLI's OAuth/keychain reads.
+   * Inject the Anthropic OAuth token as the ANTHROPIC_AUTH_TOKEN env var.
+   * Required when bare=true, because --bare disables the CLI's OAuth/keychain
+   * reads.
+   *
+   * (Der Kommentar nannte bis 2026-09-06 ANTHROPIC_API_KEY. Falsch, und nicht
+   * beliebig: die beiden reisen in VERSCHIEDENEN Kopfzeilen — x-api-key gegen
+   * Authorization. Siehe resolveSpawnEnv in manager.ts.)
    */
   injectOAuthEnv: boolean;
+  /**
+   * `claude --restricted`. Nimmt der CLI die ausfuehrenden Werkzeuge, ignoriert
+   * gefundene Einstellungsdateien und lehnt bypassPermissions ab. Siehe die
+   * woertliche Hilfe an StreamJsonOptions.restricted.
+   */
+  restricted: boolean;
+  /** `claude --strict-mcp-config`. Gehoert zu restricted dazu. */
+  strictMcpConfig: boolean;
+  /**
+   * Erlaubnisliste der eingebauten Werkzeuge. `[]` heisst `--tools ""` und
+   * damit "keine". `undefined` heisst "Flag nicht setzen".
+   */
+  tools?: string[];
+  /**
+   * Erzwungener Sitzungsmodus. "stateless" heisst: eigener Unterprozess je
+   * Anfrage, danach getoetet. Kein Wiederverwenden, kein Pool ueber Anfragen
+   * hinweg, keine Moeglichkeit, dass zwei Aufrufer denselben Verlauf sehen.
+   *
+   * Warum das ein PROFIL-Feld ist und keine Client-Option: der Aufrufer darf
+   * ueber Kontexttrennung nicht entscheiden koennen. Ein vergessener Header
+   * waere sonst eine Vermischung.
+   */
+  sessionMode?: "stateless";
   /**
    * CLI tools to forcibly disallow (claude --disallowed-tools).
    * --bare leaves Bash, Edit, Read enabled by default; for untrusted-input
@@ -93,6 +121,10 @@ export const ISOLATED_PROFILE: Profile = {
   mapResponseFormat: true,
   isolateCwd: true,
   injectOAuthEnv: true,
+  restricted: true,
+  strictMcpConfig: true,
+  tools: [],
+  sessionMode: "stateless",
   pool: "bare",
   // Security: --bare leaves Bash/Edit/Read enabled. Untrusted-input callers
   // (Honcho's response_format extraction processes raw user messages) could
@@ -112,8 +144,52 @@ export const ISOLATED_PROFILE: Profile = {
   // arrives in the result message, which is what cliResultToOpenai reads.
 };
 
+/**
+ * Das Profil fuer den Hermes-Pfad (/v1/chat/completions).
+ *
+ * WARUM ES DAS GIBT, und warum es fast gleich aussieht: der Hersteller von
+ * hermes-agent beschreibt sein Backend als "a plain model endpoint ...
+ * stateless inference services, not autonomous agents themselves". Ein
+ * Backend, das nebenbei CLAUDE.md liest, ein eigenes Gedaechtnis fuehrt,
+ * Werkzeuge ausfuehren kann und Prozesse ueber Anfragen hinweg
+ * wiederverwendet, ist genau das nicht. Deshalb faehrt der Lead-Pfad
+ * dieselbe Haertung wie der isolierte.
+ *
+ * DER EINZIGE UNTERSCHIED ist `mapResponseFormat`. Nachgesehen am 2026-09-06:
+ * hermes-agent sendet in eigenem Code nirgends ein `response_format` (alle
+ * Treffer lagen im venv, also im OpenAI-SDK). Das Feld steht hier also auf
+ * false, weil es nicht gebraucht wird — nicht, weil es schaden wuerde: ohne
+ * `response_format` im Koerper ist die Abbildung wirkungslos
+ * (responseFormatToJsonSchema gibt undefined zurueck).
+ *
+ * ZWEI PROFILE STATT EINEM war Chris' Entscheidung, ausdruecklich in Kenntnis
+ * dessen, dass sie sich heute nur in diesem einen Feld unterscheiden. Der
+ * Preis ist eine Pflicht: wer hier etwas aendert, muss jedes Mal pruefen, ob
+ * es BEIDE betrifft. Der Test `profile-hardening` haelt genau das fest — er
+ * verlangt die Haertung von jedem Profil, nicht von einem benannten.
+ */
+export const LEAD_PROFILE: Profile = {
+  bare: true,
+  disableSlashCommands: true,
+  mapResponseFormat: false,
+  isolateCwd: true,
+  injectOAuthEnv: true,
+  restricted: true,
+  strictMcpConfig: true,
+  tools: [],
+  sessionMode: "stateless",
+  pool: "bare",
+  // Redundant zu `tools: []`, und das mit Absicht. Zwei Gruende: die
+  // Hilfe zu --restricted sagt "unless --tools names them", die Sperrliste
+  // deckt also denselben Bereich von der anderen Seite ab; und sie bleibt
+  // wirksam, falls ein Aufrufer eigene Werkzeugnamen mitschickt, die mit
+  // eingebauten kollidieren (externalNativeToolDisallowList).
+  forceDisallowedTools: ["Bash", "Edit", "Read", "Write", "Grep", "Glob", "WebFetch", "WebSearch"],
+};
+
 const PROFILES: Record<string, Profile> = {
   isolated: ISOLATED_PROFILE,
+  lead: LEAD_PROFILE,
 };
 
 export function getProfile(name: string): Profile | undefined {

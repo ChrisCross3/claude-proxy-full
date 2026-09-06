@@ -161,10 +161,276 @@ export interface StreamJsonOptions {
   jsonSchema?: Record<string, unknown>;
   /** Cap agentic turns (print-mode only). Not in fingerprint. */
   maxTurns?: number;
-  /** Inject Anthropic OAuth token as ANTHROPIC_API_KEY env var (for --bare spawns). */
+  /** Inject the Anthropic OAuth token as ANTHROPIC_AUTH_TOKEN env var (for --bare spawns). */
   injectOAuthEnv?: boolean;
   /** Spawn with cwd=os.tmpdir() to prevent CLAUDE.md walk-up discovery. */
   isolateCwd?: boolean;
+  /**
+   * Restricted mode (`claude --restricted`, ab CLI 2.1.248). Woertlich aus
+   * `claude --help` der gepinnten 2.1.261 — jeder Halbsatz zaehlt:
+   *
+   *   "removes the built-in tools that run commands or code (Bash, PowerShell,
+   *    REPL and the other code-running tools) and WebFetch unless --tools names
+   *    them, and ignores user, project and local settings files (managed
+   *    settings and --settings still apply; add --strict-mcp-config to skip MCP
+   *    servers too). Also confines the file tools to the working directories
+   *    (--add-dir included), refuses bypassPermissions, ..."
+   *
+   * Zwei Folgen, die man kennen muss:
+   *   1. "--settings still apply" — der Thinking-Schalter dieses Managers
+   *      (alwaysThinkingEnabled) wird NICHT mitabgeschaltet.
+   *   2. "refuses bypassPermissions" — und zwar hart. Gemessen im Tenant:
+   *      `--restricted --dangerously-skip-permissions` bricht mit
+   *      "Error: bypassPermissions not supported in restricted mode" ab.
+   *      Der Riegel weiter unten haelt die beiden deshalb auseinander.
+   */
+  restricted?: boolean;
+  /**
+   * `claude --strict-mcp-config`: "Only use MCP servers from --mcp-config".
+   * Gehoert zu `restricted` dazu — ohne dieses Flag bleiben MCP-Server aus
+   * gefundenen Konfigurationen aktiv, und ein MCP-Werkzeug ist genau der
+   * Ausfuehrungsweg, den die Sperre schliessen soll.
+   */
+  strictMcpConfig?: boolean;
+  /**
+   * `claude --tools`: die ERLAUBNISLISTE der eingebauten Werkzeuge. Ein LEERES
+   * Array bedeutet `--tools ""` und damit "gar keine" — laut Hilfe: 'Use "" to
+   * disable all tools'.
+   *
+   * Warum pauschal statt Sperrliste (`--disallowed-tools`): eine Sperrliste
+   * muss jedes kuenftige Werkzeug kennen, das die CLI dazubekommt. Sie ist
+   * damit immer einen Release im Rueckstand, und der Fehler ist still.
+   *
+   * Gemessen und deshalb hier festgehalten: `--json-schema` UEBERLEBT die
+   * pauschale Sperre. Das war die eine ernsthafte Sorge, denn die CLI setzt
+   * strukturierte Ausgabe ueber ein synthetisches `StructuredOutput`-Werkzeug
+   * um — man konnte annehmen, `--tools ""` nehme ihr genau das weg. Tut es
+   * nicht: mit `--bare --restricted --strict-mcp-config --tools ""
+   * --json-schema <schema>` kam schemakonformes JSON zurueck.
+   */
+  tools?: string[];
+}
+
+/**
+ * Einmalige Meldung, wenn CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS gesetzt ist, der
+ * Spawn aber gehaertet laeuft. Einmal und nicht je Spawn: bei einem gefuellten
+ * Init-Pool waere das eine Zeile pro Nachfuellung, und eine Warnung, die im
+ * Sekundentakt kommt, liest niemand mehr. Der Zustand ist ausserdem statisch —
+ * er aendert sich innerhalb eines Prozesslebens nicht.
+ */
+let bypassWarnungGezeigt = false;
+function warnBypassSuppressedOnce(): void {
+  if (bypassWarnungGezeigt) return;
+  bypassWarnungGezeigt = true;
+  console.warn(
+    "[Claude CLI] CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS ist gesetzt, wird fuer " +
+    "gehaertete Spawns aber weggelassen: --restricted lehnt bypassPermissions ab " +
+    "(\"bypassPermissions not supported in restricted mode\"). Ohne Werkzeuge " +
+    "gibt es nichts zu genehmigen; der Bypass wird dort nicht gebraucht.",
+  );
+}
+
+/** Nur fuer Tests: die Einmal-Warnung zuruecksetzen. */
+export function resetBypassWarningForTests(): void {
+  bypassWarnungGezeigt = false;
+}
+
+/**
+ * Baut die Spawn-Argumentliste aus den Optionen. HERAUSGEZOGEN am 2026-09-06,
+ * und zwar aus einem konkreten Anlass: die Haertung (--restricted,
+ * --strict-mcp-config, --tools "") war sonst nicht pruefbar, ohne einen
+ * echten Unterprozess zu starten. Ein Sicherheitsmerkmal, das man nur im
+ * Betrieb sehen kann, ist keins — man merkt seinen Ausfall dann erst, wenn
+ * er schon gewirkt hat.
+ *
+ * Was NICHT hier steht: die MCP-Registrierung. Die haengt an
+ * `this.mcpDecisions` und ist damit Zustand des Objekts, nicht Funktion der
+ * Optionen. Der Schnitt liegt bewusst davor.
+ */
+export async function buildSpawnArgs(options: StreamJsonOptions): Promise<string[]> {
+  const args = [
+    "--input-format", "stream-json",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--model", options.model,
+    "--no-session-persistence",
+  ];
+  // This Claude CLI flag has existed in some builds and disappeared in
+  // others. Capability-detect it before use so a CLI update cannot break the
+  // whole persistent runtime at spawn time.
+  await pushClaudeFlagIfSupported(args, "--exclude-dynamic-system-prompt-sections", {
+    requested: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1",
+  });
+  // Effort: strict capability check. If the request asks for an effort level
+  // but the Claude CLI does not advertise --effort in claude --help, throw
+  // rather than silently spawn without it. Never let intent disappear into
+  // a degraded run.
+  if (options.effort) {
+    await pushClaudeFlagIfSupported(args, "--effort", {
+      value: options.effort,
+      strict: true,
+      requestedValueLabel: options.effort,
+    });
+  }
+  // Thinking: --settings inline JSON. claude --help has had --settings for
+  // a long time; we still capability-check before pushing, never silently drop.
+  if (options.thinking !== undefined) {
+    await pushClaudeFlagIfSupported(args, "--settings", {
+      value: JSON.stringify({ alwaysThinkingEnabled: options.thinking }),
+      strict: true,
+      requestedValueLabel: String(options.thinking),
+    });
+  }
+  // Optional verbose logging filter — passthrough of claude --debug (silent skip).
+  if (options.debug) {
+    await pushClaudeFlagIfSupported(args, "--debug", { value: options.debug });
+  }
+
+  // Optional per-request USD spending cap.
+  if (options.maxBudgetUsd !== undefined) {
+    await pushClaudeFlagIfSupported(args, "--max-budget-usd", {
+      value: String(options.maxBudgetUsd),
+      strict: true,
+      requestedValueLabel: String(options.maxBudgetUsd),
+    });
+  }
+
+  // Permission mode (e.g. plan, bypassPermissions). Already whitelist-
+  // validated at the adapter; the spawner only checks CLI capability.
+  if (options.permissionMode) {
+    await pushClaudeFlagIfSupported(args, "--permission-mode", {
+      value: options.permissionMode,
+      strict: true,
+      requestedValueLabel: options.permissionMode,
+    });
+  }
+
+  // System prompt replacement / append. Both flags coexist (append takes
+  // effect on top of the replacement); --system-prompt-file is intentionally
+  // not exposed here — we accept the prompt as inline text.
+  if (options.systemPrompt) {
+    await pushClaudeFlagIfSupported(args, "--system-prompt", {
+      value: options.systemPrompt,
+      strict: true,
+      requestedValueLabel: "<set>",
+    });
+  }
+  if (options.appendSystemPrompt) {
+    await pushClaudeFlagIfSupported(args, "--append-system-prompt", {
+      value: options.appendSystemPrompt,
+      strict: true,
+      requestedValueLabel: "<set>",
+    });
+  }
+
+  // Subagent selection: --agent NAME or --agents <inline JSON>. Both can
+  // coexist per Anthropic's docs (named selection + ad-hoc definitions).
+  if (options.agent) {
+    await pushClaudeFlagIfSupported(args, "--agent", {
+      value: options.agent,
+      strict: true,
+      requestedValueLabel: options.agent,
+    });
+  }
+  if (options.agents) {
+    await pushClaudeFlagIfSupported(args, "--agents", {
+      value: JSON.stringify(options.agents),
+      strict: true,
+      requestedValueLabel: "<inline JSON>",
+    });
+  }
+
+  // Minimal-mode spawn: skip hooks/skills/plugins/MCP/auto-memory/CLAUDE.md
+  // discovery. Sets CLAUDE_CODE_SIMPLE env in claude-CLI internally.
+  if (options.bare) {
+    await pushClaudeFlagIfSupported(args, "--bare", {
+      strict: true,
+      requestedValueLabel: "true",
+    });
+  }
+  // Disable slash commands in subprocess.
+  if (options.disableSlashCommands) {
+    await pushClaudeFlagIfSupported(args, "--disable-slash-commands", {
+      strict: true,
+      requestedValueLabel: "true",
+    });
+  }
+  // Eingeschraenkter Modus. `strict`, weil eine CLI ohne dieses Flag die
+  // zugesagte Sperre nicht herstellen kann — still weiterlaufen hiesse, eine
+  // Absicherung zu behaupten, die es nicht gibt.
+  if (options.restricted) {
+    await pushClaudeFlagIfSupported(args, "--restricted", {
+      strict: true,
+      requestedValueLabel: "true",
+    });
+  }
+  if (options.strictMcpConfig) {
+    await pushClaudeFlagIfSupported(args, "--strict-mcp-config", {
+      strict: true,
+      requestedValueLabel: "true",
+    });
+  }
+  // Erlaubnisliste. Der leere String ist der dokumentierte Weg, alles
+  // abzuschalten; `pushClaudeFlagIfSupported` reicht ihn durch, weil es auf
+  // `value !== undefined` prueft und nicht auf Wahrheitswert.
+  if (options.tools) {
+    const liste = options.tools.join(",");
+    await pushClaudeFlagIfSupported(args, "--tools", {
+      value: liste,
+      strict: true,
+      requestedValueLabel: liste === "" ? '"" (alle Werkzeuge aus)' : liste,
+    });
+  }
+  // Structured output through the CLI's own schema validator.
+  //
+  // Upstream calls --json-schema "print mode only", which reads like a
+  // conflict with the --output-format stream-json this manager fixes above.
+  // It is not: the restriction concerns the headless run, not the output
+  // format. The docs only ever show the flag next to --output-format json,
+  // so going by the docs alone the pairing used here looks inadmissible.
+  // Measured on the pinned CLI 2.1.232 with this exact spawn shape it is
+  // not — the CLI installs its synthetic StructuredOutput tool and the
+  // validated JSON arrives in the result message. The evidence sits next to
+  // responseFormatToJsonSchema in openai-to-cli.ts.
+  //
+  // Enforcement is only real from v2.1.205; earlier CLIs silently ignored an
+  // invalid schema and returned unstructured text. Our pin is above that, so
+  // `strict` below is the correct setting — a CLI that cannot offer the flag
+  // is a broken pin, not a case for a quiet downgrade.
+  if (options.jsonSchema) {
+    await pushClaudeFlagIfSupported(args, "--json-schema", {
+      value: JSON.stringify(options.jsonSchema),
+      strict: true,
+      requestedValueLabel: "<inline JSON>",
+    });
+  }
+  // Cap on agentic turns (print-mode only upstream).
+  if (options.maxTurns !== undefined) {
+    await pushClaudeFlagIfSupported(args, "--max-turns", {
+      value: String(options.maxTurns),
+      strict: true,
+      requestedValueLabel: String(options.maxTurns),
+    });
+  }
+  // Der Bypass und der eingeschraenkte Modus schliessen sich AUS — das ist
+  // keine Stilfrage, sondern gemessen: die CLI bricht mit "Error:
+  // bypassPermissions not supported in restricted mode" ab. Ohne diesen
+  // Riegel wuerde eine gesetzte Umgebungsvariable jeden gehaerteten Spawn
+  // toeten, und zwar erst beim Start des Unterprozesses.
+  //
+  // Weggelassen wird der Bypass, nicht die Sperre: die Sperre ist die
+  // Zusage, der Bypass war die Kruecke fuer ein Genehmigungssystem, das
+  // ohne Werkzeuge gar nicht mehr fragen kann.
+  if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
+    if (options.restricted) {
+      warnBypassSuppressedOnce();
+    } else {
+      args.push("--dangerously-skip-permissions");
+    }
+  }
+
+  return args;
 }
 
 export class StreamJsonSubprocess extends EventEmitter {
@@ -184,148 +450,7 @@ export class StreamJsonSubprocess extends EventEmitter {
 
   /** Spawn the subprocess and complete the initialize handshake. */
   async start(options: StreamJsonOptions): Promise<void> {
-    const args = [
-      "--input-format", "stream-json",
-      "--output-format", "stream-json",
-      "--verbose",
-      "--include-partial-messages",
-      "--model", options.model,
-      "--no-session-persistence",
-    ];
-    // This Claude CLI flag has existed in some builds and disappeared in
-    // others. Capability-detect it before use so a CLI update cannot break the
-    // whole persistent runtime at spawn time.
-    await pushClaudeFlagIfSupported(args, "--exclude-dynamic-system-prompt-sections", {
-      requested: process.env.CLAUDE_PROXY_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS === "1",
-    });
-    // Effort: strict capability check. If the request asks for an effort level
-    // but the Claude CLI does not advertise --effort in claude --help, throw
-    // rather than silently spawn without it. Never let intent disappear into
-    // a degraded run.
-    if (options.effort) {
-      await pushClaudeFlagIfSupported(args, "--effort", {
-        value: options.effort,
-        strict: true,
-        requestedValueLabel: options.effort,
-      });
-    }
-    // Thinking: --settings inline JSON. claude --help has had --settings for
-    // a long time; we still capability-check before pushing, never silently drop.
-    if (options.thinking !== undefined) {
-      await pushClaudeFlagIfSupported(args, "--settings", {
-        value: JSON.stringify({ alwaysThinkingEnabled: options.thinking }),
-        strict: true,
-        requestedValueLabel: String(options.thinking),
-      });
-    }
-    // Optional verbose logging filter — passthrough of claude --debug (silent skip).
-    if (options.debug) {
-      await pushClaudeFlagIfSupported(args, "--debug", { value: options.debug });
-    }
-
-    // Optional per-request USD spending cap.
-    if (options.maxBudgetUsd !== undefined) {
-      await pushClaudeFlagIfSupported(args, "--max-budget-usd", {
-        value: String(options.maxBudgetUsd),
-        strict: true,
-        requestedValueLabel: String(options.maxBudgetUsd),
-      });
-    }
-
-    // Permission mode (e.g. plan, bypassPermissions). Already whitelist-
-    // validated at the adapter; the spawner only checks CLI capability.
-    if (options.permissionMode) {
-      await pushClaudeFlagIfSupported(args, "--permission-mode", {
-        value: options.permissionMode,
-        strict: true,
-        requestedValueLabel: options.permissionMode,
-      });
-    }
-
-    // System prompt replacement / append. Both flags coexist (append takes
-    // effect on top of the replacement); --system-prompt-file is intentionally
-    // not exposed here — we accept the prompt as inline text.
-    if (options.systemPrompt) {
-      await pushClaudeFlagIfSupported(args, "--system-prompt", {
-        value: options.systemPrompt,
-        strict: true,
-        requestedValueLabel: "<set>",
-      });
-    }
-    if (options.appendSystemPrompt) {
-      await pushClaudeFlagIfSupported(args, "--append-system-prompt", {
-        value: options.appendSystemPrompt,
-        strict: true,
-        requestedValueLabel: "<set>",
-      });
-    }
-
-    // Subagent selection: --agent NAME or --agents <inline JSON>. Both can
-    // coexist per Anthropic's docs (named selection + ad-hoc definitions).
-    if (options.agent) {
-      await pushClaudeFlagIfSupported(args, "--agent", {
-        value: options.agent,
-        strict: true,
-        requestedValueLabel: options.agent,
-      });
-    }
-    if (options.agents) {
-      await pushClaudeFlagIfSupported(args, "--agents", {
-        value: JSON.stringify(options.agents),
-        strict: true,
-        requestedValueLabel: "<inline JSON>",
-      });
-    }
-
-    // Minimal-mode spawn: skip hooks/skills/plugins/MCP/auto-memory/CLAUDE.md
-    // discovery. Sets CLAUDE_CODE_SIMPLE env in claude-CLI internally.
-    if (options.bare) {
-      await pushClaudeFlagIfSupported(args, "--bare", {
-        strict: true,
-        requestedValueLabel: "true",
-      });
-    }
-    // Disable slash commands in subprocess.
-    if (options.disableSlashCommands) {
-      await pushClaudeFlagIfSupported(args, "--disable-slash-commands", {
-        strict: true,
-        requestedValueLabel: "true",
-      });
-    }
-    // Structured output through the CLI's own schema validator.
-    //
-    // Upstream calls --json-schema "print mode only", which reads like a
-    // conflict with the --output-format stream-json this manager fixes above.
-    // It is not: the restriction concerns the headless run, not the output
-    // format. The docs only ever show the flag next to --output-format json,
-    // so going by the docs alone the pairing used here looks inadmissible.
-    // Measured on the pinned CLI 2.1.232 with this exact spawn shape it is
-    // not — the CLI installs its synthetic StructuredOutput tool and the
-    // validated JSON arrives in the result message. The evidence sits next to
-    // responseFormatToJsonSchema in openai-to-cli.ts.
-    //
-    // Enforcement is only real from v2.1.205; earlier CLIs silently ignored an
-    // invalid schema and returned unstructured text. Our pin is above that, so
-    // `strict` below is the correct setting — a CLI that cannot offer the flag
-    // is a broken pin, not a case for a quiet downgrade.
-    if (options.jsonSchema) {
-      await pushClaudeFlagIfSupported(args, "--json-schema", {
-        value: JSON.stringify(options.jsonSchema),
-        strict: true,
-        requestedValueLabel: "<inline JSON>",
-      });
-    }
-    // Cap on agentic turns (print-mode only upstream).
-    if (options.maxTurns !== undefined) {
-      await pushClaudeFlagIfSupported(args, "--max-turns", {
-        value: String(options.maxTurns),
-        strict: true,
-        requestedValueLabel: String(options.maxTurns),
-      });
-    }
-    if (process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "true") {
-      args.push("--dangerously-skip-permissions");
-    }
+    const args = await buildSpawnArgs(options);
 
     // Option A: register openclaw-known MCP servers with the inner claude
     // CLI via --mcp-config inline JSON. Gated on
