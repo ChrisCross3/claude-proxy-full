@@ -22,6 +22,7 @@ import {
   mcpToolPrefix,
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_NAME,
+  verhandelteFassung,
 } from "../adapter/mcp-bridge.js";
 
 const WERKZEUGE = {
@@ -194,4 +195,35 @@ test("eine unbekannte Methode bekommt einen FEHLER, kein Schweigen", () => {
 test("auch eine Nachricht ganz ohne Methode bekommt eine Antwort", () => {
   const a = handleMcpMessage({}, [], "hermes");
   assert.equal(a.error?.code, -32601);
+});
+
+/**
+ * Versionsverhandlung. Der Grund steht ausführlich an `verhandelteFassung` —
+ * kurz: die Spec verlangt, die ANGEFRAGTE Fassung zurückzugeben, und ein
+ * Client darf bei einer fremden Antwort auflegen. Vorher stand hier eine feste
+ * Zeichenkette, die nur zufällig zur gepinnten CLI passte.
+ */
+test("initialize spiegelt die ANGEFRAGTE Protokollfassung zurueck", () => {
+  const a = handleMcpMessage(
+    { method: "initialize", id: 0, params: { protocolVersion: "2026-07-28" } },
+    [],
+    "hermes",
+  );
+  assert.equal((a.result as { protocolVersion: string }).protocolVersion, "2026-07-28");
+});
+
+test("ohne angefragte Fassung bleibt es bei unserer eigenen", () => {
+  for (const params of [undefined, {}, { protocolVersion: 42 }, { protocolVersion: "" }]) {
+    const a = handleMcpMessage({ method: "initialize", id: 0, params }, [], "hermes");
+    assert.equal(
+      (a.result as { protocolVersion: string }).protocolVersion,
+      MCP_PROTOCOL_VERSION,
+      `params=${JSON.stringify(params)}`,
+    );
+  }
+});
+
+test("verhandelteFassung ist fuer sich genommen pruefbar", () => {
+  assert.equal(verhandelteFassung({ protocolVersion: "2024-11-05" }), "2024-11-05");
+  assert.equal(verhandelteFassung(null), MCP_PROTOCOL_VERSION);
 });

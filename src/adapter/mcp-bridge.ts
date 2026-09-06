@@ -63,6 +63,42 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
+
+/**
+ * Die Protokollfassung, mit der wir auf ein `initialize` antworten.
+ *
+ * WARUM NICHT EINFACH UNSERE EIGENE: die MCP-Spezifikation schreibt es vor.
+ * Wörtlich (Lifecycle, Abschnitt „Version Negotiation"):
+ *
+ *   *"If the server supports the requested protocol version, it MUST respond
+ *   with the same version. Otherwise, the server MUST respond with another
+ *   protocol version it supports. […] If the client does not support the
+ *   version in the server's response, it SHOULD disconnect."*
+ *
+ * Hier stand vorher die feste Fassung aus dem Mitschnitt. Das ging gut, weil
+ * die gepinnte CLI 2.1.263 genau diese anfragt — es war aber Zufall, kein
+ * Vertrag. Fragt eine neuere CLI eine neuere Fassung an, hätten wir mit einer
+ * älteren geantwortet, und die Spec erlaubt dem Client dann ausdrücklich, die
+ * Verbindung zu trennen. Das wäre wieder ein **stiller** Ausfall: keine
+ * Werkzeuge, keine Fehlermeldung, nur wieder erfundene Werkzeugausgaben.
+ *
+ * Warum wir jede angefragte Fassung annehmen dürfen: unsere Oberfläche ist
+ * `tools/list` und `tools/call`. Beide sind seit der ersten Fassung unverändert
+ * — wir benutzen nichts, was zwischen den Revisionen strittig wäre. Ein Server,
+ * der nur diesen Kern spricht, „unterstützt" jede dieser Fassungen.
+ *
+ * Bekannt und bewusst nicht behandelt: ab der Fassung **2026-07-28** trägt
+ * JEDE Anfrage ihre Fassung in `_meta` statt nur der Handshake, und ein Server
+ * lehnt Unbekanntes mit `UnsupportedProtocolVersionError` ab. Solange die CLI
+ * das nicht schickt, wäre das Vorratsbau — es steht hier, damit es beim
+ * nächsten Bruch nicht neu recherchiert werden muss.
+ */
+export function verhandelteFassung(params: unknown): string {
+  const p = params as { protocolVersion?: unknown } | undefined;
+  const angefragt = p?.protocolVersion;
+  return typeof angefragt === "string" && angefragt.length > 0 ? angefragt : MCP_PROTOCOL_VERSION;
+}
+
 /** `mcp__<server>__` — das Präfix, das die CLI jedem MCP-Werkzeug voranstellt. */
 export function mcpToolPrefix(server: string = MCP_SERVER_NAME): string {
   return `mcp__${server}__`;
@@ -172,7 +208,7 @@ export function handleMcpMessage(
   tools: McpToolDef[],
   server: string = MCP_SERVER_NAME,
 ): JsonRpcResponse {
-  const msg = message as { method?: unknown; id?: unknown } | undefined;
+  const msg = message as { method?: unknown; id?: unknown; params?: unknown } | undefined;
   // Die CLI schickt Benachrichtigungen ohne `id`; der Mitschnitt zeigt, dass
   // das SDK dann mit id 0 antwortet. Nachgebaut statt ausgedacht.
   const id = typeof msg?.id === "number" ? msg.id : 0;
@@ -184,7 +220,7 @@ export function handleMcpMessage(
         jsonrpc: "2.0",
         id,
         result: {
-          protocolVersion: MCP_PROTOCOL_VERSION,
+          protocolVersion: verhandelteFassung(msg?.params),
           capabilities: { tools: { listChanged: true } },
           serverInfo: { name: server, version: MCP_SERVER_VERSION },
         },
