@@ -9,7 +9,20 @@
  *      (die Effort-Seite nennt die unterstuetzten Modelle NAMENTLICH und
  *      sagt getrennt, welche `xhigh` und welche `max` koennen).
  *
- *   2. MESSUNG gegen die CLI im Tenant, am 2026-09-06 mit CLI 2.1.261:
+ *   2. Anthropic auf GitHub, als Gegenprobe zur Doku:
+ *      anthropics/skills -> skills/claude-api/shared/models.md (Katalog)
+ *      anthropics/anthropic-sdk-python -> types/model.py (die IDs selbst).
+ *      Die SDK-Liste deckt sich exakt mit den elf Eintraegen hier, plus den
+ *      drei Mythos-IDs (siehe unten).
+ *
+ *   3. CLAUDE-CODE-DOKU, und die ist fuer uns die entscheidende:
+ *      https://code.claude.com/docs/en/model-config
+ *      Wir fahren nicht die Messages-API, sondern die CLI. Dort gilt:
+ *      "On the Anthropic API, Fable 5.1, Fable 5, Sonnet 5, and Opus 4.7 and
+ *      later run with the 1M window by default" -- aber Sonnet 4.6 und
+ *      Opus 4.6 laufen ohne erweiterten Kontext auf 200K.
+ *
+ *   4. MESSUNG gegen die CLI im Tenant, am 2026-09-06 mit CLI 2.1.261:
  *      jede ID und jede [1m]-Variante einmal aufgerufen. Das ist kein
  *      Luxus — die Doku beschreibt die API, wir fahren die Claude-Code-CLI
  *      unter einem ABONNEMENT. Genau dort gehen die beiden auseinander:
@@ -22,12 +35,25 @@
  * downgraded by the Claude CLI's fallback rules. When Anthropic releases
  * a new model or changes a capability, update this file.
  *
+ * WO DIE QUELLEN SICH WIDERSPRECHEN, entscheidet die Messung:
+ *   Der Katalog in anthropics/skills fuehrt Haiku 4.5 mit "Thinking: No".
+ *   Die Modellseite sagt "Thinking: Extended" und ausdruecklich "Claude Haiku
+ *   4.5 supports manual extended thinking with budget_tokens". Nachgemessen
+ *   ueber die CLI: Haiku liefert einen echten thinking-Block (plus
+ *   system/thinking_tokens mit 300 geschaetzten Denk-Tokens). Der Katalog ist
+ *   eine Verkuerzung -- gemeint ist "kein adaptives Thinking, kein Effort".
+ *   Hier steht deshalb `true`.
+ *
  * NICHT ENTHALTEN und warum:
  *   - `claude-mythos-5-1` / `claude-mythos-5`: dasselbe Modell wie Fable,
  *     nur mit anderen Schutzmechanismen, und ausschliesslich ueber ein
  *     Trusted-Access-Programm zu haben. Gemessen: die CLI antwortet
  *     "It may not exist or you may not have access to it." Ein Eintrag
  *     hier wuerde eine Faehigkeit behaupten, die dieses Konto nicht hat.
+ *   - `opusplan` (und `opusplan[1m]`): ein Claude-Code-Konstrukt, das je nach
+ *     Modus zwischen Opus und Sonnet WECHSELT. Genau das soll hinter diesem
+ *     Proxy nicht passieren -- ein Backend, das sich sein Modell selbst
+ *     aussucht, ist kein Modell-Endpunkt mehr.
  */
 
 export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -37,7 +63,16 @@ export interface ClaudeModelDefinition {
   id: string;
   /** Human-readable display name. */
   name: string;
-  /** Total context window in tokens (input + output combined). */
+  /**
+   * Kontextfenster in Tokens, wie es auf UNSEREM Weg per Default gilt --
+   * also ueber die Claude-Code-CLI gegen die Anthropic-API.
+   *
+   * Das ist NICHT immer dasselbe wie das, was das Modell koennte. Opus 4.6
+   * und Sonnet 4.6 stehen auf den Modellseiten mit 1M, laufen in Claude Code
+   * ohne erweiterten Kontext aber auf 200K -- die 1M holt dort erst das
+   * [1m]-Suffix. Wer hier die Zahl von der Modellseite eintraegt, verspricht
+   * dem Aufrufer ein Fenster, das er nicht bekommt.
+   */
   contextWindow: number;
   /**
    * Maximum output tokens per response (synchronous Messages API limit).
@@ -223,7 +258,11 @@ export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
     // Thinking ist adaptiv, der manuelle Budget-Modus ist hier abgekuendigt.
     id: 'claude-opus-4-6',
     name: 'Claude Opus 4.6',
-    contextWindow: 1_000_000,
+    // 200K und NICHT 1M: die Modellseite nennt 1M, die Claude-Code-Doku sagt
+    // aber ausdruecklich, dass Sonnet 4.6 und Opus 4.6 ohne erweiterten
+    // Kontext auf 200K laufen. Das [1m]-Suffix holt die 1M (im Tenant
+    // nachgemessen: wird angenommen).
+    contextWindow: 200_000,
     maxOutputTokens: 128_000,
     effortLevels: ['low', 'medium', 'high', 'max'],
     thinkingSupported: true,
@@ -237,7 +276,11 @@ export const MODELS: ReadonlyArray<ClaudeModelDefinition> = [
   {
     id: 'claude-sonnet-4-6',
     name: 'Claude Sonnet 4.6',
-    contextWindow: 1_000_000,
+    // 200K und NICHT 1M: die Modellseite nennt 1M, die Claude-Code-Doku sagt
+    // aber ausdruecklich, dass Sonnet 4.6 und Opus 4.6 ohne erweiterten
+    // Kontext auf 200K laufen. Das [1m]-Suffix holt die 1M (im Tenant
+    // nachgemessen: wird angenommen).
+    contextWindow: 200_000,
     maxOutputTokens: 128_000,
     effortLevels: ['low', 'medium', 'high', 'max'],
     thinkingSupported: true,

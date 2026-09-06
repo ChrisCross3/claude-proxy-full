@@ -4,16 +4,23 @@
  *
  *   - Haiku 4.5 war mit maxOutputTokens 8192 und thinkingSupported=false
  *     eingetragen. Anthropic nennt 64K und "Thinking: Extended".
- *   - Opus 4.6 und Sonnet 4.6 standen auf 200K Kontext; beide haben ein
- *     natives 1M-Fenster.
- *   - Opus 4.7/4.8 standen auf 8192 statt 128K Ausgabe.
+ *   - Opus 4.6, Sonnet 4.6, Opus 4.7 und Opus 4.8 standen auf 8192 statt
+ *     128K Ausgabe.
+ *
+ * Ein Fehler stammt aus der Reparatur selbst und steht deshalb hier:
+ *   - Ich hatte Opus 4.6 und Sonnet 4.6 zuerst auf 1M Kontext gesetzt, weil
+ *     die Modellseiten das nennen. Die Claude-Code-Doku sagt aber, dass beide
+ *     ohne erweiterten Kontext auf 200K laufen -- und wir fahren die CLI, nicht
+ *     die Messages-API. Zurueckgenommen; der Fall steht als eigener Test.
  *   - Fable 5.1 (seit 2026-09-01 das aktuelle Fable) fehlte ganz, ebenso
  *     Opus 4.5 und Sonnet 4.5.
  *   - `[1m]` wurde ueberall durchgelassen, obwohl das Abo es fuer Haiku 4.5
  *     und Opus 4.5 mit 400 ablehnt.
  *
- * Die Zahlen stammen aus den Modellseiten von Anthropic (Stand 2026-09-06),
- * die Aussagen ueber [1m] aus einer Messung gegen die CLI im Tenant.
+ * Vier Quellen, und sie widersprechen sich stellenweise: die Modellseiten von
+ * Anthropic, der Katalog in anthropics/skills, die ID-Liste im Python-SDK, und
+ * die Claude-Code-Doku. Wo sie auseinandergehen, entscheidet eine Messung
+ * gegen die CLI im Tenant -- das gilt fuer [1m] und fuer Haikus Thinking.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -30,8 +37,8 @@ const SPEC: Array<[string, number, number, boolean, boolean, boolean]> = [
   ["claude-fable-5",    1_000_000, 128_000, true,  true, true],
   ["claude-opus-4-8",   1_000_000, 128_000, true,  true, true],
   ["claude-opus-4-7",   1_000_000, 128_000, true,  true, true],
-  ["claude-opus-4-6",   1_000_000, 128_000, true,  true, true],
-  ["claude-sonnet-4-6", 1_000_000, 128_000, true,  true, true],
+  ["claude-opus-4-6",     200_000, 128_000, true,  true, true],
+  ["claude-sonnet-4-6",   200_000, 128_000, true,  true, true],
   ["claude-opus-4-5",     200_000,  64_000, true,  true, false],
   ["claude-sonnet-4-5",   200_000,  64_000, false, true, true],
 ];
@@ -49,11 +56,45 @@ for (const [id, ctx, out, hasEffort, thinking, oneM] of SPEC) {
   });
 }
 
+test("kontext: die 4.6er stehen auf 200K, HABEN aber eine 1M-Variante", () => {
+  // Das ist der Unterschied zwischen "was kann das Modell" und "was bekommt
+  // der Aufrufer per Default". Die Modellseiten nennen fuer Opus 4.6 und
+  // Sonnet 4.6 ein 1M-Fenster; die Claude-Code-Doku sagt, dass beide ohne
+  // erweiterten Kontext auf 200K laufen. Ich hatte hier am 2026-09-06 zuerst
+  // 1M eingetragen -- das haette dem Aufrufer ein Fenster versprochen, das er
+  // ohne [1m] nicht bekommt.
+  for (const id of ["claude-opus-4-6", "claude-sonnet-4-6"]) {
+    const def = resolveModel(id);
+    assert.equal(def?.contextWindow, 200_000, `${id} laeuft per Default auf 200K`);
+    assert.equal(def?.oneMillionContextVariant, true, `${id} muss [1m] anbieten`);
+  }
+});
+
+test("kontext: was auf dem Anthropic-Weg nativ 1M faehrt, steht auch auf 1M", () => {
+  // Claude-Code-Doku: "On the Anthropic API, Fable 5.1, Fable 5, Sonnet 5,
+  // and Opus 4.7 and later run with the 1M window by default."
+  for (const id of ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5",
+                    "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5"]) {
+    assert.equal(resolveModel(id)?.contextWindow, 1_000_000, id);
+  }
+});
+
 test("registry: die aktuelle Reihe ist vollstaendig", () => {
   const ids = MODELS.map((m) => m.id);
   for (const id of ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]) {
     assert.ok(ids.includes(id), `aktuelles Modell ${id} fehlt`);
   }
+});
+
+test("registry: die IDs decken sich mit dem Anthropic-SDK", () => {
+  // Gegenprobe aus anthropics/anthropic-sdk-python (types/model.py). Dort
+  // stehen dieselben elf plus die drei Mythos-IDs; mehr gibt es nicht.
+  const erwartet = [
+    "claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8",
+    "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6",
+    "claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5",
+  ].sort();
+  assert.deepEqual(MODELS.map((m) => m.id).sort(), erwartet);
 });
 
 test("registry: Mythos ist bewusst NICHT eingetragen", () => {
@@ -62,6 +103,14 @@ test("registry: Mythos ist bewusst NICHT eingetragen", () => {
   // die dieses Konto nicht hat.
   assert.equal(resolveModel("claude-mythos-5-1"), undefined);
   assert.equal(resolveModel("claude-mythos-5"), undefined);
+  assert.equal(resolveModel("claude-mythos-preview"), undefined);
+});
+
+test("registry: opusplan ist bewusst NICHT eingetragen", () => {
+  // Ein Claude-Code-Konstrukt, das je nach Modus zwischen Opus und Sonnet
+  // wechselt. Ein Backend, das sich sein Modell selbst aussucht, ist kein
+  // Modell-Endpunkt mehr -- genau das soll hinter diesem Proxy nicht sein.
+  assert.equal(resolveModel("opusplan"), undefined);
 });
 
 // --- Effort-Stufen, wie die Effort-Doku sie je Modell auflistet ---------
