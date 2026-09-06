@@ -63,6 +63,13 @@ const stufen = {
 function raus(code, text) {
   const liste = Object.entries(stufen).map(([k, v]) => `${v ? "OK  " : "FEHLT"} ${k}`).join("\n  ");
   console.log(`\nSTUFEN:\n  ${liste}`);
+  // Bei fehlender Sichtbarkeit ist die ENTSCHEIDENDE Zusatzinformation, was die
+  // CLI stattdessen gemeldet hat: eine leere Liste heisst "die Sperre hat auch
+  // unser Werkzeug mitgenommen", eine gefuellte ohne unseren Namen heisst etwas
+  // ganz anderes. Ohne diese Zeile muesste man raten.
+  if (!stufen.werkzeug_sichtbar) {
+    console.log(`\nVon der CLI gemeldete Werkzeuge: ${gemeldeteWerkzeuge === null ? "(kein system/init gesehen)" : JSON.stringify(gemeldeteWerkzeuge)}`);
+  }
   console.log(`\nVERTRAGSTEST: ${text}`);
   process.exit(code);
 }
@@ -104,6 +111,9 @@ kind.on("spawn", () => {
   });
 });
 
+let zugGesendet = false;
+/** Fuer die Fehlermeldung: was die CLI tatsaechlich als sichtbar gemeldet hat. */
+let gemeldeteWerkzeuge = null;
 let rest = "";
 kind.stdout.on("data", (buf) => {
   rest += buf.toString();
@@ -116,6 +126,14 @@ kind.stdout.on("data", (buf) => {
 
     if (m.type === "control_response" && m.response?.subtype === "success") {
       stufen.init_beantwortet = true;
+      // Die CLI gibt ihr `system/init` -- und damit die Liste der sichtbaren
+      // Werkzeuge -- erst beim ZUG aus, nicht beim Spawn. Ohne diesen Zug
+      // koennte der Test die letzte Stufe nie sehen. Bewusst der billigste
+      // moegliche Zug; geprueft wird das Protokoll, nicht die Antwort.
+      if (!zugGesendet) {
+        zugGesendet = true;
+        schreib({ type: "user", message: { role: "user", content: [{ type: "text", text: "Sag nur OK." }] } });
+      }
       continue;
     }
 
@@ -140,6 +158,7 @@ kind.stdout.on("data", (buf) => {
     // die Aussage, die `--tools ""` neben `--allowedTools mcp__hermes__*`
     // rechtfertigt.
     if (m.type === "system" && Array.isArray(m.tools)) {
+      gemeldeteWerkzeuge = m.tools;
       if (m.tools.some((t) => typeof t === "string" && t.startsWith(`mcp__${MCP_SERVER_NAME}__`))) {
         stufen.werkzeug_sichtbar = true;
       }
