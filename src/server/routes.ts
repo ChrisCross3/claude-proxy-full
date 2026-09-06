@@ -373,6 +373,51 @@ function meldeWerkzeugweg(calls: OpenAIToolCall[]): OpenAIToolCall[] {
   return calls;
 }
 
+
+/**
+ * Ein gescheiterter Zug ist ein Fehler, keine Antwort — auch auf dem
+ * stream-json-Weg.
+ *
+ * ANLASS, am 2026-09-06 im Tenant gemessen: bei erschöpftem Kontingent
+ * antwortete der Proxy mit **HTTP 200** und dem Text „API Error: Request
+ * rejected (429) · This request would exceed your account's rate limit" als
+ * Inhalt der Assistenten-Nachricht, `finish_reason: "stop"`. Auf dem Lead-Pfad
+ * genauso wie auf dem isolierten. Weder Hermes noch Honcho können das von einer
+ * echten Antwort unterscheiden — Honchos Deriver hätte den Satz als
+ * **abgeleiteten Fakt** ins Langzeitgedächtnis geschrieben, und eine Wiederhol-
+ * schleife, die am HTTP-Status hängt, wäre nie angesprungen.
+ *
+ * Der Riegel `classifyCliResultError` war längst gebaut — er hing nur an den
+ * PRINT-MODE-Pfaden. Die drei stream-json-Antwortbauer (Lead, `/v1/responses`,
+ * isoliert) hatten ihn nicht, und stream-json ist die Laufzeit, die heute alles
+ * benutzt. Ein Riegel am falschen Tor ist kein Riegel.
+ *
+ * An der Primärquelle nachgemessen — die CLI meldet in genau diesem Fall
+ * `subtype: "success"` UND `is_error: true`. Die beiden widersprechen sich,
+ * und genau deshalb lässt der Klassifizierer `is_error` allein genügen.
+ */
+export function sendeCliFehlerFallsGescheitert(
+  result: ClaudeCliResult,
+  res: Response,
+  tb: TraceBuilder,
+): boolean {
+  const cliError = classifyCliResultError(result);
+  if (!cliError) return false;
+  tb.setError(cliError.traceClass, cliError.message);
+  recordUsageOnTrace(tb, result);
+  tb.commit();
+  if (!res.headersSent) {
+    res.status(cliError.status).json(toOpenAiErrorBody(cliError));
+  } else if (!res.writableEnded) {
+    // Bei offenem SSE-Strom ist der Status schon vergeben. Dann geht der Fehler
+    // als Fehlerobjekt in den Strom — nicht als fertige Nachricht getarnt.
+    res.write(`data: ${JSON.stringify(toOpenAiErrorBody(cliError))}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+  return true;
+}
+
 export interface Haertung {
   restricted?: boolean;
   strictMcpConfig?: boolean;
@@ -1262,6 +1307,14 @@ async function handleStreamJsonRequest(
     console.error(`[StreamJson] submit complete req_id=${requestId} keepalives=${keepaliveCount} durationMs=${Date.now() - requestStartAt}`);
     annotateAndRecordUsage(result, model);
 
+    // Vor allem anderen: hat die CLI den Zug ueberhaupt geschafft? Siehe
+    // sendeCliFehlerFallsGescheitert -- hier fehlte der Riegel, weshalb ein
+    // 429 als Antwort durchging.
+    if (sendeCliFehlerFallsGescheitert(result, res, tb)) {
+      releaseDiscard("turn_error");
+      return;
+    }
+
     const rawText = result.result || assistantText;
     // Strukturierte Aufrufe haben Vorrang: sie stammen aus den
     // `tool_use`-Bloecken der Assistenten-Nachricht, nicht aus geratenem Text.
@@ -1708,6 +1761,13 @@ async function handleResponsesStreamJson(
     const result = await subprocess.submitTurn(userText);
     done = true;
     annotateAndRecordUsage(result, cliInput.model);
+
+    // Gleicher Riegel wie im Lead-Pfad, gleiche Begruendung.
+    if (sendeCliFehlerFallsGescheitert(result, res, tb)) {
+      releaseDiscard("turn_error");
+      return;
+    }
+
     const resultForAdapters: ClaudeCliResult = { ...result, result: result.result || assistantText };
     const rawText = resultForAdapters.result || assistantText;
     const parsed = parseToolCalls(rawText, chatReq);
@@ -2336,6 +2396,15 @@ export async function handleIsolatedChatCompletions(req: Request, res: Response)
   try {
     const result = await subprocess.submitTurn(cliInput.prompt);
     annotateAndRecordUsage(result, resolvedModel);
+
+    // Der wichtigste der drei Einbauten: an diesem Pfad haengt Honchos
+    // Gedaechtnis. Ohne den Riegel wird ein Kontingentfehler zum abgeleiteten
+    // Fakt. Der Unterprozess ist hier zustandslos und stirbt ohnehin.
+    if (sendeCliFehlerFallsGescheitert(result, res, tb)) {
+      subprocess.kill();
+      return;
+    }
+
     recordUsageOnTrace(tb, result);
     tb.setFinishReason("stop");
     tb.commit();
